@@ -1,0 +1,258 @@
+﻿@page "/lake"
+@using System.Net.NetworkInformation
+@using System.Diagnostics
+@using System.Runtime.InteropServices
+@implements IDisposable
+
+<div class="lake-page">
+
+    <div class="bg-text">TIMBER</div>
+
+    <div class="panel">
+
+        <div class="stat">
+            <div class="label">UPTIME</div>
+            <div class="value">@uptimeText</div>
+        </div>
+
+        <div class="stat">
+            <div class="label">CPU USAGE</div>
+            <div class="value">@cpuUsageText</div>
+        </div>
+
+        <div class="stat">
+            <div class="label">MEMORY</div>
+            <div class="value">@memoryText</div>
+        </div>
+
+        <div class="stat">
+            <div class="label">RUNNING APPS</div>
+            <div class="value">@runningAppsText</div>
+        </div>
+
+        <div class="stat">
+            <div class="label">PING (To a central server)</div>
+            <div class="value">@pingText</div>
+        </div>
+
+    </div>
+
+</div>
+
+<style>
+    .lake-page {
+        position: relative;
+        width: 100vw;
+        height: 100vh;
+        overflow: hidden;
+        background: radial-gradient(circle at top left, #103d10 0%, transparent 40%), radial-gradient(circle at bottom right, #071207 0%, transparent 35%), linear-gradient(135deg, #050805, #091109);
+        color: #8dff8d;
+        font-family: Consolas, monospace;
+    }
+
+    .bg-text {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: min(30vw, 20rem);
+        font-weight: 900;
+        letter-spacing: 1rem;
+        color: rgba(0, 255, 0, 0.05);
+        user-select: none;
+        pointer-events: none;
+        text-shadow: 0 0 40px rgba(0,255,0,0.2), 0 0 100px rgba(0,255,0,0.1);
+    }
+
+    .panel {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        min-width: 380px;
+        display: flex;
+        flex-direction: column;
+        gap: 1.25rem;
+        padding: 2rem;
+        background: rgba(0, 20, 0, 0.45);
+        border: 1px solid rgba(0,255,0,0.18);
+        border-radius: 24px;
+        backdrop-filter: blur(14px);
+        box-shadow: 0 0 40px rgba(0,255,0,0.08), inset 0 0 20px rgba(0,255,0,0.04);
+    }
+
+    .stat {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 2rem;
+    }
+
+    .label {
+        opacity: 0.7;
+        font-size: 0.9rem;
+    }
+
+    .value {
+        font-size: 1.2rem;
+        font-weight: bold;
+        color: #a8ffa8;
+        text-shadow: 0 0 12px rgba(0,255,0,0.4);
+    }
+</style>
+
+@code {
+
+    private Timer? timer;
+
+    private string uptimeText = "Loading...";
+    private string cpuUsageText = "Loading...";
+    private string memoryText = "Loading...";
+    private string runningAppsText = "Loading...";
+    private string pingText = "Loading...";
+
+#if WINDOWS
+    private PerformanceCounter? cpuCounter;
+    private PerformanceCounter? memCounter;
+#endif
+
+    protected override async Task OnInitializedAsync()
+    {
+#if WINDOWS
+        try
+        {
+            cpuCounter =
+                new PerformanceCounter(
+                    "Processor",
+                    "% Processor Time",
+                    "_Total");
+
+            cpuCounter.NextValue();
+
+            memCounter =
+                new PerformanceCounter(
+                    "Memory",
+                    "Available MBytes");
+
+            memCounter.NextValue();
+        }
+        catch
+        {
+        }
+#endif
+
+        await UpdateStats();
+
+        timer = new Timer(async _ =>
+        {
+            await UpdateStats();
+            await InvokeAsync(StateHasChanged);
+
+        }, null, TimeSpan.Zero, TimeSpan.FromSeconds(8));
+    }
+
+    private async Task UpdateStats()
+    {
+        try
+        {
+            var uptime =
+                TimeSpan.FromMilliseconds(
+                    Environment.TickCount64);
+
+            uptimeText =
+                $"{uptime.Days}d {uptime.Hours}h {uptime.Minutes}m";
+        }
+        catch
+        {
+            uptimeText = "Unavailable";
+        }
+
+#if WINDOWS
+
+        try
+        {
+            if (cpuCounter != null)
+            {
+                await Task.Delay(300);
+
+                cpuUsageText =
+                    $"{Math.Round(cpuCounter.NextValue())}%";
+            }
+        }
+        catch
+        {
+            cpuUsageText = "?";
+        }
+
+        try
+        {
+            if (memCounter != null)
+            {
+                float availableMB = memCounter.NextValue();
+
+                var totalBytes =
+                    GC.GetGCMemoryInfo().TotalAvailableMemoryBytes;
+
+                double totalGiB =
+                    totalBytes / 1024d / 1024d / 1024d;
+
+                double availableGiB =
+                    availableMB / 1024d;
+
+                double usedGiB =
+                    totalGiB - availableGiB;
+
+                memoryText =
+                    $"{usedGiB:F1} GiB / {totalGiB:F1} GiB";
+            }
+        }
+        catch
+        {
+            memoryText = "Unavailable";
+        }
+
+        try
+        {
+            runningAppsText =
+                Process.GetProcesses().Length.ToString();
+        }
+        catch
+        {
+            runningAppsText = "?";
+        }
+
+#else
+        cpuUsageText = "Unsupported";
+        memoryText = "Unsupported";
+        runningAppsText = "Unsupported";
+#endif
+
+        try
+        {
+            using var ping = new Ping();
+
+            var reply =
+                await ping.SendPingAsync("8.8.8.8", 4000);
+
+            pingText =
+                reply.Status == IPStatus.Success
+                    ? $"{reply.RoundtripTime} ms"
+                    : reply.Status.ToString();
+        }
+        catch
+        {
+            pingText = "Failed";
+        }
+    }
+
+    public void Dispose()
+    {
+        timer?.Dispose();
+
+#if WINDOWS
+        cpuCounter?.Dispose();
+        memCounter?.Dispose();
+#endif
+    }
+}

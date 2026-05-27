@@ -1,0 +1,223 @@
+@page "/search"
+@using DesktopWallpaper.Services
+@using Microsoft.AspNetCore.Components.Web
+@inject AppSearchService SearchService
+@inject NavigationManager Navigation
+
+<div class="search-container">
+    <div class="search-panel">
+        <div class="search-header">
+            <input 
+                type="text" 
+                class="search-input" 
+                placeholder="Search for an app..."
+                @ref="_searchInput"
+                @bind="_searchQuery"
+                @oninput="OnSearchInput"
+                @onkeydown="OnKeyDown"
+                autofocus />
+        </div>
+
+        <div class="search-results">
+            @if (_results != null && _results.Count > 0)
+            {
+                @foreach (var (result, index) in _results.Select((r, i) => (r, i)))
+                {
+                    <div class="search-result @(_selectedIndex == index ? "selected" : "")" 
+                         @onclick="() => SelectResult(index)"
+                         @ondblclick="() => LaunchResult(index)"
+                         @onmousedown:preventDefault="true">
+                        <div class="result-name">@result.Name</div>
+                    </div>
+                }
+            }
+            else if (!string.IsNullOrEmpty(_searchQuery))
+            {
+                <div class="no-results">No apps found</div>
+            }
+            else if (_results == null)
+            {
+                <div class="loading">Loading apps...</div>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    private string _searchQuery = "";
+    private List<SearchResult>? _results;
+    private int _selectedIndex = 0;
+    private ElementReference _searchInput;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _results = await SearchService.GetAllAppsAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await _searchInput.FocusAsync();
+        }
+    }
+
+    private async Task OnSearchInput(ChangeEventArgs e)
+    {
+        _searchQuery = e.Value?.ToString() ?? "";
+        _selectedIndex = 0;
+        _results = await SearchService.SearchAsync(_searchQuery);
+    }
+
+    private void OnKeyDown(KeyboardEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case "Escape":
+                Navigation.NavigateTo("/");
+                break;
+            case "Enter":
+            case "NumpadEnter":
+                LaunchSelected();
+                break;
+        }
+
+        // Only process arrow keys if we have results
+        if (_results == null || _results.Count == 0)
+            return;
+
+        switch (e.Key)
+        {
+            case "ArrowDown":
+                _selectedIndex = (_selectedIndex + 1) % _results.Count;
+                break;
+            case "ArrowUp":
+                _selectedIndex = (_selectedIndex - 1 + _results.Count) % _results.Count;
+                break;
+        }
+    }
+
+    private void LaunchSelected()
+    {
+        if (_results != null && _selectedIndex >= 0 && _selectedIndex < _results.Count)
+        {
+            LaunchResult(_selectedIndex);
+        }
+    }
+
+    private void SelectResult(int index)
+    {
+        _selectedIndex = index;
+    }
+
+    private void LaunchResult(int index)
+    {
+        if (_results == null || index < 0 || index >= _results.Count)
+            return;
+
+        SearchService.LaunchApp(_results[index]);
+        Navigation.NavigateTo("/");
+    }
+}
+
+<style>
+    .search-container {
+        width: 100vw;
+        height: 100vh;
+        display: flex;
+        align-items: flex-start;
+        justify-content: center;
+        background: rgba(0, 0, 0, 0.7);
+        backdrop-filter: blur(4px);
+        position: fixed;
+        top: 0;
+        left: 0;
+        z-index: 1000;
+        padding-top: 10vh;
+    }
+
+    .search-panel {
+        width: 90%;
+        max-width: 600px;
+        background: rgba(20, 20, 20, 0.95);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 12px;
+        overflow: hidden;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        backdrop-filter: blur(20px);
+        max-height: 80vh;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .search-header {
+        padding: 20px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .search-input {
+        width: 100%;
+        padding: 12px 16px;
+        font-size: 18px;
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 8px;
+        color: white;
+        outline: none;
+        transition: all 0.2s ease;
+    }
+
+    .search-input:focus {
+        background: rgba(255, 255, 255, 0.08);
+        border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    .search-input::placeholder {
+        color: rgba(255, 255, 255, 0.4);
+    }
+
+    .search-results {
+        overflow-y: auto;
+        max-height: calc(80vh - 80px);
+    }
+
+    .search-result {
+        padding: 12px 20px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+        cursor: pointer;
+        transition: all 0.15s ease;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+
+    .search-result:hover {
+        background: rgba(255, 255, 255, 0.08);
+    }
+
+    .search-result.selected {
+        background: rgba(100, 150, 255, 0.2);
+        border-left: 3px solid rgba(100, 150, 255, 0.8);
+        padding-left: 17px;
+    }
+
+    .result-name {
+        color: white;
+        font-size: 16px;
+        font-weight: 500;
+    }
+
+    .no-results {
+        padding: 40px 20px;
+        text-align: center;
+        color: rgba(255, 255, 255, 0.4);
+        font-size: 16px;
+    }
+
+    .loading {
+        padding: 40px 20px;
+        text-align: center;
+        color: rgba(255, 255, 255, 0.4);
+        font-size: 16px;
+    }
+</style>

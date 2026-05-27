@@ -1,0 +1,83 @@
+﻿@inherits LayoutComponentBase
+@implements IDisposable
+@inject NavigationManager Navigation
+@inject IJSRuntime JS
+
+<style>
+    .taskbar {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        height: 48px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0 8px;
+        background: rgba(20, 20, 20, 0.92);
+        backdrop-filter: blur(12px);
+        overflow-x: auto;
+        overflow-y: hidden;
+    }
+
+    .taskbar-item {
+        height: 36px;
+        padding: 0 10px;
+        border: none;
+        border-radius: 6px;
+        background: transparent;
+        color: white;
+        cursor: pointer;
+        white-space: nowrap;
+    }
+
+        .taskbar-item:hover {
+            background: rgba(255, 255, 255, 0.12);
+        }
+</style>
+<div class="page">
+    <main>
+        <article class="content">
+            @Body
+        </article>
+    </main>
+</div>
+<TaskbarBar />
+
+@code {
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+#if WINDOWS
+            MauiProgram.StartKeyPressed += OnNativeStartKeyPressed;
+#endif
+            // Add keyboard listener for Windows/Start key
+            await JS.InvokeVoidAsync("addKeyboardListener", DotNetObjectReference.Create(this));
+        }
+    }
+
+    [JSInvokable]
+    public void OnStartKeyPressed()
+    {
+#if WINDOWS
+        MauiProgram.OpenInteractiveMode();
+#endif
+        var path = new Uri(Navigation.Uri).AbsolutePath.TrimEnd('/');
+        Navigation.NavigateTo(path.Equals("/search", StringComparison.OrdinalIgnoreCase) ? "/" : "/search");
+    }
+
+#if WINDOWS
+    private void OnNativeStartKeyPressed()
+    {
+        _ = InvokeAsync(OnStartKeyPressed);
+    }
+#endif
+
+    public void Dispose()
+    {
+#if WINDOWS
+        MauiProgram.StartKeyPressed -= OnNativeStartKeyPressed;
+#endif
+    }
+}
