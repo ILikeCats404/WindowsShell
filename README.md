@@ -118,28 +118,7 @@ Honestly:
 > I don’t fully know how you’re compiling this either.
 
 But in theory, it depends on what this evolved from:
-
-- If it’s **C# / WPF / WinUI**:
-  ```
-  dotnet build
-  ```
-
-- If it’s **C++ shell replacement**:
-  - Visual Studio build
-  - target x64 Release
-  - pray
-
-- If it’s **Blazor / WebView shell**:
-  ```
-  dotnet publish -c Release
-  ```
-
-- If it’s **pure chaos JS overlay**:
-  - npm install (maybe)
-  - npm run build (maybe)
-
----
-
+its c# so probably something like ```dotnet build``` but i have no clue lol (visual studio is nice like that)
 ## 🧪 Philosophy
 
 Windowsshell is not meant to replace Windows Explorer in a serious way.
