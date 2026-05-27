@@ -1,6 +1,6 @@
 # Windowsshell  
 ### (Timber’s Windows Shell)
-
+-# WRITTEN BY AI! (just the readme only some of the code is ai)
 A lightweight, slightly chaotic Windows shell replacement / overlay UI experiment.
 
 It is not polished. It is not stable. It *does things*.
@@ -32,8 +32,6 @@ A custom shell-style interface layered over Windows with:
 ---
 
 ## ⌨️ Hidden / Special Controls
-
-Some elements are intentionally not obvious:
 
 ### 🖱️ Interaction Unlock
 - `Ctrl + Shift + Caps Lock` → toggles clickability for certain UI elements
@@ -82,6 +80,22 @@ Default:
 
 - Can be changed to any executable path
 - Used for launching Discord via the shell shortcut system
+
+---
+
+## 🔐 Environment Setup (IMPORTANT)
+
+Windowsshell requires an environment variable to be set:
+
+```
+TOKEN = <Discord Bot Token>
+```
+
+- This must be a valid Discord bot token
+- Used for Discord-related integrations/features
+- If missing or invalid, Discord features will fail silently or behave unpredictably
+
+⚠️ Do NOT expose this token publicly or commit it to source control.
 
 ---
 
