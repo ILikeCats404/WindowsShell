@@ -9,6 +9,7 @@ namespace DesktopWallpaper.Services
         public nint Handle { get; set; }
         public string Title { get; set; } = "";
         public string ProcessName { get; set; } = "";
+        public string? IconBase64 { get; set; }
         public bool IsMinimized { get; set; }
     }
 
@@ -84,9 +85,12 @@ namespace DesktopWallpaper.Services
                     return true;
 
                 string processName = "";
+                string? iconBase64 = null;
                 try
                 {
-                    processName = Process.GetProcessById((int)processId).ProcessName;
+                    using var process = Process.GetProcessById((int)processId);
+                    processName = process.ProcessName;
+                    iconBase64 = GetProcessIconBase64(process);
                 }
                 catch
                 {
@@ -97,6 +101,7 @@ namespace DesktopWallpaper.Services
                     Handle = hWnd,
                     Title = title,
                     ProcessName = processName,
+                    IconBase64 = iconBase64,
                     IsMinimized = IsIconic(hWnd)
                 });
 
@@ -132,6 +137,30 @@ namespace DesktopWallpaper.Services
             }
 
             ActivateWindow(window);
+        }
+
+        private static string? GetProcessIconBase64(Process process)
+        {
+            try
+            {
+                var path = process.MainModule?.FileName;
+                if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                    return null;
+
+                using var icon = System.Drawing.Icon.ExtractAssociatedIcon(path);
+                if (icon is null)
+                    return null;
+
+                using var bmp = icon.ToBitmap();
+                using var ms = new MemoryStream();
+                bmp.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
+
+                return Convert.ToBase64String(ms.ToArray());
+            }
+            catch
+            {
+                return null;
+            }
         }
     }
 }

@@ -1,13 +1,13 @@
-﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging;
 using Microsoft.Maui.LifecycleEvents;
 
 #if WINDOWS
-using Microsoft.UI.Windowing;
 using Microsoft.UI;
-using WinRT.Interop;
-using System.Runtime.InteropServices;
+using Microsoft.UI.Windowing;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using Windows.Media.Control;
+using WinRT.Interop;
 using WinUIWindow = Microsoft.UI.Xaml.Window;
 #endif
 
@@ -16,51 +16,150 @@ namespace DesktopWallpaper
     public static class MauiProgram
     {
 #if WINDOWS
-        // =========================
-        // Win32 Imports
-        // =========================
+        /*
+         * Assistant-authored Windows shell support.
+         *
+         * Notes for future maintainers:
+         * - Timber's original app idea and UI direction are still the heart of this thing.
+         * - The native Windows glue below -- click-through mode, hotkeys, media keys,
+         *   volume keys, Win-key behavior, screen snip handling, and custom Alt-Tab
+         *   events -- was substantially written and organized by Codex.
+         * - So if this section looks suspiciously like someone spent too much time
+         *   arguing with Win32 interop on Timber's behalf: yes. That was me (codex). Credit taken. :D
+         *   
+         *   
+         *   Timber note here, yeah i have no clue how the heck this works lol
+         */
+        
+        // Win32 window/style constants
+        private const int GWL_EXSTYLE = -20;
+        private const int GWLP_WNDPROC = -4;
+
+        private const int WS_EX_TRANSPARENT = 0x00000020;
+        private const int WS_EX_LAYERED = 0x00080000;
+        private const int WS_EX_NOACTIVATE = 0x08000000;
+        private const int WS_EX_TOOLWINDOW = 0x00000080;
+
+        private const int SW_SHOW = 5;
+
+        // Window messages and keyboard hook constants
+        private const int WM_HOTKEY = 0x0312;
+        private const int WH_KEYBOARD_LL = 13;
+        private const int WM_KEYDOWN = 0x0100;
+        private const int WM_KEYUP = 0x0101;
+        private const int WM_SYSKEYDOWN = 0x0104;
+        private const int WM_SYSKEYUP = 0x0105;
+
+        // Registered hotkey IDs
+        private const int TOGGLE_CLICK_THROUGH_HOTKEY_ID = 9000;
+        private const int MEDIA_PLAY_PAUSE_HOTKEY_ID = 9001;
+        private const int MEDIA_NEXT_TRACK_HOTKEY_ID = 9002;
+        private const int MEDIA_PREV_TRACK_HOTKEY_ID = 9003;
+        private const int MEDIA_STOP_HOTKEY_ID = 9004;
+        private const int VOLUME_MUTE_HOTKEY_ID = 9005;
+        private const int VOLUME_DOWN_HOTKEY_ID = 9006;
+        private const int VOLUME_UP_HOTKEY_ID = 9007;
+
+        // Virtual keys
+        private const uint MOD_CONTROL = 0x0002;
+        private const uint MOD_SHIFT = 0x0004;
+
+        private const uint VK_CAPITAL = 0x14;
+        private const int VK_TAB = 0x09;
+        private const int VK_SHIFT = 0x10;
+        private const int VK_S = 0x53;
+        private const int VK_V = 0x56;
+        private const int VK_LWIN = 0x5B;
+        private const int VK_RWIN = 0x5C;
+        private const int VK_LSHIFT = 0xA0;
+        private const int VK_RSHIFT = 0xA1;
+        private const int VK_MENU = 0x12;
+        private const int VK_LMENU = 0xA4;
+        private const int VK_RMENU = 0xA5;
+        private const int VK_VOLUME_MUTE = 0xAD;
+        private const int VK_VOLUME_DOWN = 0xAE;
+        private const int VK_VOLUME_UP = 0xAF;
+        private const int VK_MEDIA_NEXT_TRACK = 0xB0;
+        private const int VK_MEDIA_PREV_TRACK = 0xB1;
+        private const int VK_MEDIA_STOP = 0xB2;
+        private const int VK_MEDIA_PLAY_PAUSE = 0xB3;
+
+        // Optional appbar/taskbar reservation constants. Currently unused, but kept handy.
+        private const uint ABM_NEW = 0x00000000;
+        private const uint ABM_QUERYPOS = 0x00000002;
+        private const uint ABM_SETPOS = 0x00000003;
+        private const uint ABE_BOTTOM = 3;
+
+        private const uint SWP_NOZORDER = 0x0004;
+        private const uint SWP_NOACTIVATE = 0x0010;
+        private const uint SWP_SHOWWINDOW = 0x0040;
+
+        private const int SM_CXSCREEN = 0;
+        private const int SM_CYSCREEN = 1;
+
+        private static IntPtr _hwnd;
+        private static IntPtr _oldWndProc;
+        private static IntPtr _keyboardHook;
+        private static OverlappedPresenter? _presenter;
+
+        private static readonly WndProc _wndProc = WndProcHandler;
+        private static readonly LowLevelKeyboardProc _keyboardProc = KeyboardHookHandler;
+
+        private static bool _clickThrough = true;
+        private static bool _taskbarReserved;
+        private static bool _winKeyDown;
+        private static bool _shiftKeyDown;
+        private static bool _altKeyDown;
+        private static bool _screenSnipHandled;
+
+        public static event Action? StartKeyPressed;
+        public static event Action? AltTabPressed;
+        public static event Action? AltReleased;
+        public static event Action? ClipboardHistoryPressed;
+        public static event Action<string>? ScreenshotCaptured;
+
+        private delegate IntPtr WndProc(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+        private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
 
         [DllImport("user32.dll")]
-        static extern int GetWindowLong(IntPtr hWnd, int nIndex);
+        private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
 
         [DllImport("user32.dll")]
-        static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
+        private static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
 
         [DllImport("user32.dll")]
-        static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+        private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
 
         [DllImport("user32.dll")]
-        static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+        private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
         [DllImport("user32.dll")]
-        static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+        private static extern bool SetForegroundWindow(IntPtr hWnd);
 
         [DllImport("user32.dll")]
-        static extern bool SetForegroundWindow(IntPtr hWnd);
+        private static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
 
         [DllImport("user32.dll")]
-        static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
+        private static extern IntPtr CallWindowProc(IntPtr lpPrevWndFunc, IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
 
         [DllImport("user32.dll")]
-        static extern IntPtr CallWindowProc(IntPtr lpPrevWndFunc, IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+        private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
 
         [DllImport("user32.dll")]
-        static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
-
-        [DllImport("user32.dll")]
-        static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+        private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
 
         [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        static extern IntPtr GetModuleHandle(string? lpModuleName);
+        private static extern IntPtr GetModuleHandle(string? lpModuleName);
+
         [DllImport("shell32.dll")]
-        static extern uint SHAppBarMessage(uint dwMessage, ref APPBARDATA pData);
+        private static extern uint SHAppBarMessage(uint dwMessage, ref APPBARDATA pData);
 
         [DllImport("user32.dll")]
-        static extern int SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter,
-            int X, int Y, int cx, int cy, uint uFlags);
+        private static extern int SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
 
         [DllImport("user32.dll")]
-        static extern int GetSystemMetrics(int nIndex);
+        private static extern int GetSystemMetrics(int nIndex);
+
         [StructLayout(LayoutKind.Sequential)]
         public struct RECT
         {
@@ -80,92 +179,89 @@ namespace DesktopWallpaper
             public RECT rc;
             public int lParam;
         }
-        // =========================
-        // Constants
-        // =========================
 
-        const int GWL_EXSTYLE = -20;
-        const int GWLP_WNDPROC = -4;
-        const int WM_HOTKEY = 0x0312;
-        const int WH_KEYBOARD_LL = 13;
-        const int WM_KEYDOWN = 0x0100;
-        const int WM_KEYUP = 0x0101;
-        const int WM_SYSKEYDOWN = 0x0104;
-        const int WM_SYSKEYUP = 0x0105;
+        private enum EDataFlow
+        {
+            eRender,
+            eCapture,
+            eAll,
+        }
 
-        const int TOGGLE_CLICK_THROUGH_HOTKEY_ID = 9000;
-        const int MEDIA_PLAY_PAUSE_HOTKEY_ID = 9001;
-        const int MEDIA_NEXT_TRACK_HOTKEY_ID = 9002;
-        const int MEDIA_PREV_TRACK_HOTKEY_ID = 9003;
-        const int MEDIA_STOP_HOTKEY_ID = 9004;
+        private enum ERole
+        {
+            eConsole,
+            eMultimedia,
+            eCommunications,
+        }
 
-        const uint MOD_CONTROL = 0x0002;
-        const uint MOD_SHIFT = 0x0004;
-        const uint VK_CAPITAL = 0x14;
-        const int VK_SHIFT = 0x10;
-        const int VK_LSHIFT = 0xA0;
-        const int VK_RSHIFT = 0xA1;
-        const int VK_S = 0x53;
-        const int VK_LWIN = 0x5B;
-        const int VK_RWIN = 0x5C;
-        const int VK_VOLUME_MUTE = 0xAD;
-        const int VK_VOLUME_DOWN = 0xAE;
-        const int VK_VOLUME_UP = 0xAF;
-        const int VK_MEDIA_NEXT_TRACK = 0xB0;
-        const int VK_MEDIA_PREV_TRACK = 0xB1;
-        const int VK_MEDIA_STOP = 0xB2;
-        const int VK_MEDIA_PLAY_PAUSE = 0xB3;
+        private enum CLSCTX : uint
+        {
+            INPROC_SERVER = 0x1,
+            INPROC_HANDLER = 0x2,
+            LOCAL_SERVER = 0x4,
+            REMOTE_SERVER = 0x10,
+            ALL = INPROC_SERVER | INPROC_HANDLER | LOCAL_SERVER | REMOTE_SERVER,
+        }
 
-        const int SW_SHOW = 5;
+        [ComImport]
+        [Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
+        private class MMDeviceEnumerator
+        {
+        }
 
-        const int WS_EX_TRANSPARENT = 0x00000020;
-        const int WS_EX_LAYERED = 0x00080000;
-        const int WS_EX_NOACTIVATE = 0x08000000;
-        const int WS_EX_TOOLWINDOW = 0x00000080;
+        [ComImport]
+        [Guid("A95664D2-9614-4F35-A746-DE8DB63617E6")]
+        [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        private interface IMMDeviceEnumerator
+        {
+            int NotImpl1();
+            int GetDefaultAudioEndpoint(EDataFlow dataFlow, ERole role, out IMMDevice ppDevice);
+        }
 
-        // =========================
-        // State
-        // =========================
+        [ComImport]
+        [Guid("D666063F-1587-4E43-81F1-B948E807363F")]
+        [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        private interface IMMDevice
+        {
+            int Activate(ref Guid iid, CLSCTX dwClsCtx, IntPtr pActivationParams, out IAudioEndpointVolume ppInterface);
+        }
 
-        private static IntPtr _hwnd;
-        private static IntPtr _oldWndProc;
-        private static IntPtr _keyboardHook;
-        private static OverlappedPresenter? _presenter;
-        private static readonly WndProc _wndProc = WndProcHandler;
-        private static readonly LowLevelKeyboardProc _keyboardProc = KeyboardHookHandler;
-        private static bool _clickThrough = true;
-        private static bool _taskbarReserved;
-        private static bool _winKeyDown;
-        private static bool _shiftKeyDown;
-        private static bool _screenSnipHandled;
-
-        public static event Action? StartKeyPressed;
-
-        // IMPORTANT: delegate type (NOT a method)
-        private delegate IntPtr WndProc(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
-        private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
-
-        const uint ABM_NEW = 0x00000000;
-        const uint ABM_QUERYPOS = 0x00000002;
-        const uint ABM_SETPOS = 0x00000003;
-
-        const uint ABE_BOTTOM = 3;
-
-        const uint SWP_NOZORDER = 0x0004;
-        const uint SWP_NOACTIVATE = 0x0010;
-        const uint SWP_SHOWWINDOW = 0x0040;
-
-        const int SM_CXSCREEN = 0;
-        const int SM_CYSCREEN = 1;
-
+        [ComImport]
+        [Guid("5CDF2C82-841E-4546-9722-0CF74078229A")]
+        [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        private interface IAudioEndpointVolume
+        {
+            int RegisterControlChangeNotify(IntPtr pNotify);
+            int UnregisterControlChangeNotify(IntPtr pNotify);
+            int GetChannelCount(out uint pnChannelCount);
+            int SetMasterVolumeLevel(float fLevelDB, Guid pguidEventContext);
+            int SetMasterVolumeLevelScalar(float fLevel, Guid pguidEventContext);
+            int GetMasterVolumeLevel(out float pfLevelDB);
+            int GetMasterVolumeLevelScalar(out float pfLevel);
+            int SetChannelVolumeLevel(uint nChannel, float fLevelDB, Guid pguidEventContext);
+            int SetChannelVolumeLevelScalar(uint nChannel, float fLevel, Guid pguidEventContext);
+            int GetChannelVolumeLevel(uint nChannel, out float pfLevelDB);
+            int GetChannelVolumeLevelScalar(uint nChannel, out float pfLevel);
+            int SetMute(bool bMute, Guid pguidEventContext);
+            int GetMute(out bool pbMute);
+            int GetVolumeStepInfo(out uint pnStep, out uint pnStepCount);
+            int VolumeStepUp(Guid pguidEventContext);
+            int VolumeStepDown(Guid pguidEventContext);
+            int QueryHardwareSupport(out uint pdwHardwareSupportMask);
+            int GetVolumeRange(out float pflVolumeMindB, out float pflVolumeMaxdB, out float pflVolumeIncrementdB);
+        }
 #endif
 
         public static MauiApp CreateMauiApp()
         {
+#if WINDOWS
+            KillExplorerShell();
+#endif
+
             Config.Load();
 
             var builder = MauiApp.CreateBuilder();
-            
+
             builder
                 .UseMauiApp<App>()
                 .ConfigureFonts(fonts =>
@@ -179,75 +275,23 @@ namespace DesktopWallpaper
             builder.Services.AddBlazorWebViewDeveloperTools();
             builder.Logging.AddDebug();
 #endif
-            builder.Services.AddScoped(sp => new HttpClient());
+
+            builder.Services.AddScoped(_ => new HttpClient());
             builder.Services.AddSingleton<DesktopWallpaper.Services.TaskbarShortcutsService>();
             builder.Services.AddSingleton<DesktopWallpaper.Services.AppSearchService>();
             builder.Services.AddSingleton<DesktopWallpaper.Services.OpenWindowsService>();
-            
+            builder.Services.AddSingleton<DesktopWallpaper.Services.ClipboardHistoryService>();
 
             builder.ConfigureLifecycleEvents(events =>
             {
 #if WINDOWS
                 events.AddWindows(windows =>
                 {
-                    windows.OnWindowCreated(window =>
-                    {
-                        var nativeWindow = window as WinUIWindow;
-                        _hwnd = WindowNative.GetWindowHandle(nativeWindow);
-
-                        var windowId = Win32Interop.GetWindowIdFromWindow(_hwnd);
-                        var appWindow = AppWindow.GetFromWindowId(windowId);
-
-                        appWindow.SetPresenter(AppWindowPresenterKind.Overlapped);
-
-                        _presenter = appWindow.Presenter as OverlappedPresenter;
-                        if (_presenter is null)
-                        {
-                            return;
-                        }
-
-                        _presenter.IsMaximizable = false;
-                        _presenter.IsMinimizable = false;
-                        _presenter.IsResizable = false;
-
-                        _presenter.SetBorderAndTitleBar(false, false);
-
-                        _presenter.PreferredMinimumHeight = 1080;
-                        _presenter.PreferredMinimumWidth = 1920;
-
-                        _presenter.Maximize();
-
-                        //ReserveBottomTaskbarSpace(_hwnd, 48);
-
-                        // start click-through OFF
-                        ApplyClickThrough(_hwnd, false);
-
-                        // register hotkeys
-                        RegisterHotKey(_hwnd, TOGGLE_CLICK_THROUGH_HOTKEY_ID, MOD_CONTROL | MOD_SHIFT, VK_CAPITAL);
-                        RegisterHotKey(_hwnd, MEDIA_PLAY_PAUSE_HOTKEY_ID, 0, VK_MEDIA_PLAY_PAUSE);
-                        RegisterHotKey(_hwnd, MEDIA_NEXT_TRACK_HOTKEY_ID, 0, VK_MEDIA_NEXT_TRACK);
-                        RegisterHotKey(_hwnd, MEDIA_PREV_TRACK_HOTKEY_ID, 0, VK_MEDIA_PREV_TRACK);
-                        RegisterHotKey(_hwnd, MEDIA_STOP_HOTKEY_ID, 0, VK_MEDIA_STOP);
-
-                        if (_keyboardHook == IntPtr.Zero)
-                        {
-                            using var currentProcess = Process.GetCurrentProcess();
-                            using var currentModule = currentProcess.MainModule;
-                            var moduleHandle = GetModuleHandle(currentModule?.ModuleName);
-                            _keyboardHook = SetWindowsHookEx(WH_KEYBOARD_LL, _keyboardProc, moduleHandle, 0);
-                        }
-
-                        // hook WndProc (ONLY ONCE)
-                        _oldWndProc = SetWindowLongPtr(
-                            _hwnd,
-                            GWLP_WNDPROC,
-                            Marshal.GetFunctionPointerForDelegate(_wndProc)
-                        );
-                    });
+                    windows.OnWindowCreated(ConfigureWindowsShellWindow);
                 });
 #endif
             });
-            
+
             return builder.Build();
         }
 
@@ -275,14 +319,93 @@ namespace DesktopWallpaper
         }
 
 #if WINDOWS
+        private static void KillExplorerShell()
+        {
+            try
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "taskkill.exe",
+                    Arguments = "/f /im explorer.exe",
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                });
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine(ex);
+            }
+        }
 
-        // =========================
-        // Click-through toggle
-        // =========================
+        private static void ConfigureWindowsShellWindow(WinUIWindow window)
+        {
+            _hwnd = WindowNative.GetWindowHandle(window);
+
+            var windowId = Win32Interop.GetWindowIdFromWindow(_hwnd);
+            var appWindow = AppWindow.GetFromWindowId(windowId);
+            appWindow.SetPresenter(AppWindowPresenterKind.Overlapped);
+
+            _presenter = appWindow.Presenter as OverlappedPresenter;
+            if (_presenter is null)
+            {
+                return;
+            }
+
+            _presenter.IsMaximizable = false;
+            _presenter.IsMinimizable = false;
+            _presenter.IsResizable = false;
+            _presenter.SetBorderAndTitleBar(false, false);
+            _presenter.PreferredMinimumHeight = 1080;
+            _presenter.PreferredMinimumWidth = 1920;
+            _presenter.Maximize();
+
+            ApplyClickThrough(_hwnd, false);
+            RegisterShellHotkeys();
+            InstallKeyboardHook();
+            InstallWindowProcHook();
+        }
+
+        private static void RegisterShellHotkeys()
+        {
+            RegisterHotKey(_hwnd, TOGGLE_CLICK_THROUGH_HOTKEY_ID, MOD_CONTROL | MOD_SHIFT, VK_CAPITAL);
+            RegisterHotKey(_hwnd, MEDIA_PLAY_PAUSE_HOTKEY_ID, 0, VK_MEDIA_PLAY_PAUSE);
+            RegisterHotKey(_hwnd, MEDIA_NEXT_TRACK_HOTKEY_ID, 0, VK_MEDIA_NEXT_TRACK);
+            RegisterHotKey(_hwnd, MEDIA_PREV_TRACK_HOTKEY_ID, 0, VK_MEDIA_PREV_TRACK);
+            RegisterHotKey(_hwnd, MEDIA_STOP_HOTKEY_ID, 0, VK_MEDIA_STOP);
+            RegisterHotKey(_hwnd, VOLUME_MUTE_HOTKEY_ID, 0, VK_VOLUME_MUTE);
+            RegisterHotKey(_hwnd, VOLUME_DOWN_HOTKEY_ID, 0, VK_VOLUME_DOWN);
+            RegisterHotKey(_hwnd, VOLUME_UP_HOTKEY_ID, 0, VK_VOLUME_UP);
+        }
+
+        private static void InstallKeyboardHook()
+        {
+            if (_keyboardHook != IntPtr.Zero)
+            {
+                return;
+            }
+
+            using var currentProcess = Process.GetCurrentProcess();
+            using var currentModule = currentProcess.MainModule;
+            var moduleHandle = GetModuleHandle(currentModule?.ModuleName);
+            _keyboardHook = SetWindowsHookEx(WH_KEYBOARD_LL, _keyboardProc, moduleHandle, 0);
+        }
+
+        private static void InstallWindowProcHook()
+        {
+            if (_oldWndProc != IntPtr.Zero)
+            {
+                return;
+            }
+
+            _oldWndProc = SetWindowLongPtr(
+                _hwnd,
+                GWLP_WNDPROC,
+                Marshal.GetFunctionPointerForDelegate(_wndProc));
+        }
 
         private static void ApplyClickThrough(IntPtr hwnd, bool enable)
         {
-            int exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
+            var exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
 
             if (enable)
             {
@@ -306,49 +429,7 @@ namespace DesktopWallpaper
             DevStuff.IsClickThrough = _clickThrough;
             ApplyClickThrough(_hwnd, _clickThrough);
         }
-        private static void ReserveBottomTaskbarSpace(IntPtr hwnd, int height)
-{
-    if (_taskbarReserved)
-    {
-        return;
-    }
 
-    int screenWidth = GetSystemMetrics(SM_CXSCREEN);
-    int screenHeight = GetSystemMetrics(SM_CYSCREEN);
-
-    APPBARDATA data = new()
-    {
-        cbSize = Marshal.SizeOf<APPBARDATA>(),
-        hWnd = hwnd,
-        uEdge = ABE_BOTTOM,
-        rc = new RECT
-        {
-            left = 0,
-            right = screenWidth,
-            top = screenHeight - height,
-            bottom = screenHeight
-        }
-    };
-
-    SHAppBarMessage(ABM_NEW, ref data);
-    SHAppBarMessage(ABM_QUERYPOS, ref data);
-
-    data.rc.top = data.rc.bottom - height;
-
-    SHAppBarMessage(ABM_SETPOS, ref data);
-
-    SetWindowPos(
-        hwnd,
-        IntPtr.Zero,
-        data.rc.left,
-        data.rc.top,
-        data.rc.right - data.rc.left,
-        data.rc.bottom - data.rc.top,
-        SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW
-    );
-
-        _taskbarReserved = true;
-    }
         public static void OpenInteractiveMode()
         {
             _clickThrough = false;
@@ -362,61 +443,111 @@ namespace DesktopWallpaper
 
         private static IntPtr KeyboardHookHandler(int nCode, IntPtr wParam, IntPtr lParam)
         {
-            if (nCode >= 0)
+            if (nCode < 0)
             {
-                var message = wParam.ToInt32();
-                var vkCode = Marshal.ReadInt32(lParam);
+                return CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
+            }
 
-                if (message == WM_KEYDOWN || message == WM_SYSKEYDOWN)
+            var message = wParam.ToInt32();
+            var vkCode = Marshal.ReadInt32(lParam);
+
+            if (message == WM_KEYDOWN || message == WM_SYSKEYDOWN)
+            {
+                return HandleKeyDown(nCode, wParam, lParam, vkCode);
+            }
+
+            if (message == WM_KEYUP || message == WM_SYSKEYUP)
+            {
+                return HandleKeyUp(nCode, wParam, lParam, vkCode);
+            }
+
+            return CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
+        }
+
+        private static IntPtr HandleKeyDown(int nCode, IntPtr wParam, IntPtr lParam, int vkCode)
+        {
+            if (IsShiftKey(vkCode))
+            {
+                _shiftKeyDown = true;
+                return _winKeyDown ? 1 : CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
+            }
+
+            if (IsWinKey(vkCode))
+            {
+                _winKeyDown = true;
+                _screenSnipHandled = false;
+                return 1;
+            }
+
+            if (IsAltKey(vkCode))
+            {
+                _altKeyDown = true;
+                return 1;
+            }
+
+            if (_winKeyDown && _shiftKeyDown && vkCode == VK_S)
+            {
+                _screenSnipHandled = true;
+                DisableInteractiveMode();
+                CaptureFullScreenScreenshot();
+                return 1;
+            }
+
+            if (_winKeyDown && vkCode == VK_V)
+            {
+                _screenSnipHandled = true;
+                OpenInteractiveMode();
+                ClipboardHistoryPressed?.Invoke();
+                return 1;
+            }
+
+            if (_altKeyDown && vkCode == VK_TAB)
+            {
+                AltTabPressed?.Invoke();
+                return 1;
+            }
+
+            if (IsPlaybackMediaKey(vkCode))
+            {
+                _ = HandlePlaybackMediaKeyAsync(vkCode);
+                return 1;
+            }
+
+            if (IsVolumeKey(vkCode))
+            {
+                HandleVolumeKey(vkCode);
+                return 1;
+            }
+
+            return CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
+        }
+
+        private static IntPtr HandleKeyUp(int nCode, IntPtr wParam, IntPtr lParam, int vkCode)
+        {
+            if (IsShiftKey(vkCode))
+            {
+                _shiftKeyDown = false;
+                return _winKeyDown ? 1 : CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
+            }
+
+            if (IsWinKey(vkCode))
+            {
+                if (!_screenSnipHandled)
                 {
-                    if (IsShiftKey(vkCode))
-                    {
-                        _shiftKeyDown = true;
-                        return _winKeyDown ? 1 : CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
-                    }
-
-                    if (IsWinKey(vkCode))
-                    {
-                        _winKeyDown = true;
-                        _screenSnipHandled = false;
-                        return 1;
-                    }
-
-                    if (_winKeyDown && _shiftKeyDown && vkCode == VK_S)
-                    {
-                        _screenSnipHandled = true;
-                        DisableInteractiveMode();
-                        OpenScreenSnip();
-                        return 1;
-                    }
-
-                    if (IsPlaybackMediaKey(vkCode))
-                    {
-                        _ = HandlePlaybackMediaKeyAsync(vkCode);
-                        return 1;
-                    }
+                    OpenInteractiveMode();
+                    StartKeyPressed?.Invoke();
                 }
-                else if (message == WM_KEYUP || message == WM_SYSKEYUP)
-                {
-                    if (IsShiftKey(vkCode))
-                    {
-                        _shiftKeyDown = false;
-                        return _winKeyDown ? 1 : CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
-                    }
 
-                    if (IsWinKey(vkCode))
-                    {
-                        if (!_screenSnipHandled)
-                        {
-                            OpenInteractiveMode();
-                            StartKeyPressed?.Invoke();
-                        }
+                _winKeyDown = false;
+                _screenSnipHandled = false;
+                return 1;
+            }
 
-                        _winKeyDown = false;
-                        _screenSnipHandled = false;
-                        return 1;
-                    }
-                }
+            if (IsAltKey(vkCode))
+            {
+                _altKeyDown = false;
+                AltReleased?.Invoke();
+                return 1;
             }
 
             return CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
@@ -432,12 +563,24 @@ namespace DesktopWallpaper
             return vkCode is VK_SHIFT or VK_LSHIFT or VK_RSHIFT;
         }
 
+        private static bool IsAltKey(int vkCode)
+        {
+            return vkCode is VK_MENU or VK_LMENU or VK_RMENU;
+        }
+
         private static bool IsPlaybackMediaKey(int vkCode)
         {
             return vkCode is VK_MEDIA_NEXT_TRACK
                 or VK_MEDIA_PREV_TRACK
                 or VK_MEDIA_STOP
                 or VK_MEDIA_PLAY_PAUSE;
+        }
+
+        private static bool IsVolumeKey(int vkCode)
+        {
+            return vkCode is VK_VOLUME_MUTE
+                or VK_VOLUME_DOWN
+                or VK_VOLUME_UP;
         }
 
         private static async Task HandlePlaybackMediaKeyAsync(int vkCode)
@@ -458,7 +601,7 @@ namespace DesktopWallpaper
                     VK_MEDIA_PREV_TRACK => await session.TrySkipPreviousAsync(),
                     VK_MEDIA_STOP => await session.TryStopAsync(),
                     VK_MEDIA_PLAY_PAUSE => await session.TryTogglePlayPauseAsync(),
-                    _ => false
+                    _ => false,
                 };
             }
             catch (Exception ex)
@@ -467,15 +610,73 @@ namespace DesktopWallpaper
             }
         }
 
-        private static void OpenScreenSnip()
+        private static void HandleVolumeKey(int vkCode)
+        {
+            IAudioEndpointVolume? endpointVolume = null;
+            IMMDevice? device = null;
+
+            try
+            {
+                var enumerator = (IMMDeviceEnumerator)new MMDeviceEnumerator();
+                enumerator.GetDefaultAudioEndpoint(EDataFlow.eRender, ERole.eMultimedia, out device);
+
+                var endpointVolumeId = typeof(IAudioEndpointVolume).GUID;
+                device.Activate(ref endpointVolumeId, CLSCTX.ALL, IntPtr.Zero, out endpointVolume);
+
+                var eventContext = Guid.Empty;
+
+                switch (vkCode)
+                {
+                    case VK_VOLUME_MUTE:
+                        endpointVolume.GetMute(out var muted);
+                        endpointVolume.SetMute(!muted, eventContext);
+                        break;
+                    case VK_VOLUME_DOWN:
+                        endpointVolume.VolumeStepDown(eventContext);
+                        break;
+                    case VK_VOLUME_UP:
+                        endpointVolume.VolumeStepUp(eventContext);
+                        break;
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine(ex);
+            }
+            finally
+            {
+                if (endpointVolume is not null)
+                {
+                    Marshal.ReleaseComObject(endpointVolume);
+                }
+
+                if (device is not null)
+                {
+                    Marshal.ReleaseComObject(device);
+                }
+            }
+        }
+
+        private static void CaptureFullScreenScreenshot()
         {
             try
             {
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = "ms-screenclip:",
-                    UseShellExecute = true
-                });
+                var width = GetSystemMetrics(SM_CXSCREEN);
+                var height = GetSystemMetrics(SM_CYSCREEN);
+                var folder = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.MyPictures),
+                    "DesktopWallpaper Screenshots");
+
+                Directory.CreateDirectory(folder);
+
+                var path = Path.Combine(folder, $"screenshot-{DateTime.Now:yyyyMMdd-HHmmss}.png");
+
+                using var bitmap = new System.Drawing.Bitmap(width, height);
+                using var graphics = System.Drawing.Graphics.FromImage(bitmap);
+                graphics.CopyFromScreen(0, 0, 0, 0, bitmap.Size);
+                bitmap.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+
+                ScreenshotCaptured?.Invoke(path);
             }
             catch (Exception ex)
             {
@@ -483,41 +684,88 @@ namespace DesktopWallpaper
             }
         }
 
-        // =========================
-        // REAL WndProc handler
-        // =========================
-
         private static IntPtr WndProcHandler(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam)
         {
             if (msg == WM_HOTKEY)
             {
-                var hotkeyId = wParam.ToInt32();
-
-                if (hotkeyId == TOGGLE_CLICK_THROUGH_HOTKEY_ID)
-                {
-                    ToggleClickThrough();
-                }
-                else if (hotkeyId == MEDIA_PLAY_PAUSE_HOTKEY_ID)
-                {
-                    _ = HandlePlaybackMediaKeyAsync(VK_MEDIA_PLAY_PAUSE);
-                }
-                else if (hotkeyId == MEDIA_NEXT_TRACK_HOTKEY_ID)
-                {
-                    _ = HandlePlaybackMediaKeyAsync(VK_MEDIA_NEXT_TRACK);
-                }
-                else if (hotkeyId == MEDIA_PREV_TRACK_HOTKEY_ID)
-                {
-                    _ = HandlePlaybackMediaKeyAsync(VK_MEDIA_PREV_TRACK);
-                }
-                else if (hotkeyId == MEDIA_STOP_HOTKEY_ID)
-                {
-                    _ = HandlePlaybackMediaKeyAsync(VK_MEDIA_STOP);
-                }
+                HandleRegisteredHotkey(wParam.ToInt32());
             }
 
             return CallWindowProc(_oldWndProc, hWnd, msg, wParam, lParam);
         }
 
+        private static void HandleRegisteredHotkey(int hotkeyId)
+        {
+            switch (hotkeyId)
+            {
+                case TOGGLE_CLICK_THROUGH_HOTKEY_ID:
+                    ToggleClickThrough();
+                    break;
+                case MEDIA_PLAY_PAUSE_HOTKEY_ID:
+                    _ = HandlePlaybackMediaKeyAsync(VK_MEDIA_PLAY_PAUSE);
+                    break;
+                case MEDIA_NEXT_TRACK_HOTKEY_ID:
+                    _ = HandlePlaybackMediaKeyAsync(VK_MEDIA_NEXT_TRACK);
+                    break;
+                case MEDIA_PREV_TRACK_HOTKEY_ID:
+                    _ = HandlePlaybackMediaKeyAsync(VK_MEDIA_PREV_TRACK);
+                    break;
+                case MEDIA_STOP_HOTKEY_ID:
+                    _ = HandlePlaybackMediaKeyAsync(VK_MEDIA_STOP);
+                    break;
+                case VOLUME_MUTE_HOTKEY_ID:
+                    HandleVolumeKey(VK_VOLUME_MUTE);
+                    break;
+                case VOLUME_DOWN_HOTKEY_ID:
+                    HandleVolumeKey(VK_VOLUME_DOWN);
+                    break;
+                case VOLUME_UP_HOTKEY_ID:
+                    HandleVolumeKey(VK_VOLUME_UP);
+                    break;
+            }
+        }
+
+        private static void ReserveBottomTaskbarSpace(IntPtr hwnd, int height)
+        {
+            if (_taskbarReserved)
+            {
+                return;
+            }
+
+            var screenWidth = GetSystemMetrics(SM_CXSCREEN);
+            var screenHeight = GetSystemMetrics(SM_CYSCREEN);
+
+            APPBARDATA data = new()
+            {
+                cbSize = Marshal.SizeOf<APPBARDATA>(),
+                hWnd = hwnd,
+                uEdge = ABE_BOTTOM,
+                rc = new RECT
+                {
+                    left = 0,
+                    right = screenWidth,
+                    top = screenHeight - height,
+                    bottom = screenHeight,
+                },
+            };
+
+            SHAppBarMessage(ABM_NEW, ref data);
+            SHAppBarMessage(ABM_QUERYPOS, ref data);
+
+            data.rc.top = data.rc.bottom - height;
+            SHAppBarMessage(ABM_SETPOS, ref data);
+
+            SetWindowPos(
+                hwnd,
+                IntPtr.Zero,
+                data.rc.left,
+                data.rc.top,
+                data.rc.right - data.rc.left,
+                data.rc.bottom - data.rc.top,
+                SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+
+            _taskbarReserved = true;
+        }
 #endif
     }
 }

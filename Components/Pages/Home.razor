@@ -7,6 +7,7 @@
 @inject IJSRuntime JS
 @inject TaskbarShortcutsService ShortcutsService
 @inject OpenWindowsService OpenWindowsService
+@inject ClipboardHistoryService ClipboardHistoryService
 @inject NavigationManager Navigation
 
 
@@ -155,6 +156,78 @@
     </div>
     <div class="overlay"></div>
 
+    @if (showAltTabMenu)
+    {
+        <div class="alt-tab-scrim">
+            <div class="alt-tab-menu">
+                <div class="alt-tab-header">
+                    <span>Switch windows</span>
+                    <span>@(altTabSelectedIndex + 1) / @altTabWindows.Count</span>
+                </div>
+
+                <div class="alt-tab-grid">
+                    @for (var i = 0; i < altTabWindows.Count; i++)
+                    {
+                        var index = i;
+                        var window = altTabWindows[index];
+
+                        <button class="alt-tab-card @(index == altTabSelectedIndex ? "selected" : "")"
+                                @onclick="() => ActivateAltTabWindow(index)"
+                                title="@window.Title">
+                            <div class="alt-tab-icon">
+                                @GetWindowInitial(window)
+                            </div>
+
+                            <div class="alt-tab-text">
+                                <div class="alt-tab-title">@window.Title</div>
+                                <div class="alt-tab-process">@GetWindowLabel(window)</div>
+                            </div>
+
+                            @if (window.IsMinimized)
+                            {
+                                <span class="alt-tab-pill">Min</span>
+                            }
+                        </button>
+                    }
+                </div>
+            </div>
+        </div>
+    }
+
+    @if (showClipboardHistory)
+    {
+        <div class="clipboard-panel">
+            <div class="clipboard-header">
+                <span>Clipboard</span>
+                <button class="clipboard-clear" @onclick="ClearClipboardHistory">clear</button>
+            </div>
+
+            <div class="clipboard-list">
+                @if (clipboardItems.Count == 0)
+                {
+                    <div class="clipboard-empty">No text copied yet</div>
+                }
+                else
+                {
+                    @foreach (var item in clipboardItems)
+                    {
+                        <button class="clipboard-item"
+                                title="Copy this item"
+                                @onclick="() => RestoreClipboardItem(item)">
+                            <span class="clipboard-time">@item.CapturedAt.ToString("h:mm:ss tt")</span>
+                            <span class="clipboard-text">@PreviewClipboardText(item.Text)</span>
+                        </button>
+                    }
+                }
+            </div>
+        </div>
+    }
+
+    @if (!string.IsNullOrWhiteSpace(shellToast))
+    {
+        <div class="shell-toast">@shellToast</div>
+    }
+
     <div class="open-apps-bar">
         <div class="bottom-bar-shortcuts">
             @foreach (var item in shortcuts)
@@ -187,7 +260,16 @@
                 <button class="open-app-button @(window.IsMinimized ? "minimized" : "")"
                         title="@window.Title"
                         @onclick="() => ActivateWindow(window)">
-                    <span class="open-app-dot"></span>
+                    @if (!string.IsNullOrWhiteSpace(window.IconBase64))
+                    {
+                        <img src="data:image/png;base64,@window.IconBase64"
+                             class="open-app-icon"
+                             alt="" />
+                    }
+                    else
+                    {
+                        <span class="open-app-fallback">@GetWindowInitial(window)</span>
+                    }
                     <span class="open-app-name">@GetWindowLabel(window)</span>
                 </button>
             }
@@ -366,6 +448,12 @@
     //shortcut stuff
     private List<TaskbarShortcut> shortcuts = new();
     private List<OpenWindowInfo> openWindows = new();
+    private List<OpenWindowInfo> altTabWindows = new();
+    private List<ClipboardHistoryItem> clipboardItems = new();
+    private bool showAltTabMenu;
+    private bool showClipboardHistory;
+    private int altTabSelectedIndex;
+    private string shellToast = "";
 
     //inbuilt cmd
     Process process = null;
@@ -404,7 +492,7 @@
             }
             else
             {
-                
+
                 var alert = await DiscordB.GetAlert("Invalid Channel ID!");
                 DiscordMessages.Add(alert);
                 StateHasChanged();
@@ -415,7 +503,7 @@
         {
             await DiscordB.SendMessage(DiscordInput);
             DiscordInput = "";
-            
+
             DiscordMessages = await DiscordB.GetMessages();
             DiscordMessages.Reverse();
             StateHasChanged();
@@ -533,6 +621,12 @@
     }
     protected override async Task OnInitializedAsync()
     {
+        MauiProgram.AltTabPressed += OnAltTabPressed;
+        MauiProgram.AltReleased += OnAltReleased;
+        MauiProgram.ClipboardHistoryPressed += OnClipboardHistoryPressed;
+        MauiProgram.ScreenshotCaptured += OnScreenshotCaptured;
+        ClipboardHistoryService.HistoryChanged += OnClipboardHistoryChanged;
+
         DiscordB.selectedId = 0;
         _timer = new System.Threading.Timer(_ =>
         {
@@ -540,6 +634,7 @@
                 DateTime.Now,
                 "Mountain Standard Time");
             openWindows = OpenWindowsService.GetOpenWindows();
+            ClipboardHistoryService.Poll();
 
             InvokeAsync(StateHasChanged);
         }, null, 0, 1000);
@@ -547,13 +642,93 @@
         DiscordB.start();
         shortcuts = ShortcutsService.GetShortcuts();
         openWindows = OpenWindowsService.GetOpenWindows();
+        clipboardItems = ClipboardHistoryService.Items.ToList();
         await LoadWeather();
+    }
+
+    private void OnAltTabPressed()
+    {
+        _ = InvokeAsync(() =>
+        {
+            altTabWindows = OpenWindowsService.GetOpenWindows();
+
+            if (altTabWindows.Count == 0)
+            {
+                showAltTabMenu = false;
+                return;
+            }
+
+            altTabSelectedIndex = showAltTabMenu
+                ? (altTabSelectedIndex + 1) % altTabWindows.Count
+                : Math.Min(1, altTabWindows.Count - 1);
+
+            showAltTabMenu = true;
+            MauiProgram.OpenInteractiveMode();
+            StateHasChanged();
+        });
+    }
+
+    private void OnAltReleased()
+    {
+        _ = InvokeAsync(() =>
+        {
+            if (!showAltTabMenu || altTabWindows.Count == 0)
+            {
+                showAltTabMenu = false;
+                StateHasChanged();
+                return;
+            }
+
+            var selectedWindow = altTabWindows[Math.Clamp(altTabSelectedIndex, 0, altTabWindows.Count - 1)];
+            showAltTabMenu = false;
+            OpenWindowsService.ActivateWindow(selectedWindow);
+            openWindows = OpenWindowsService.GetOpenWindows();
+            MauiProgram.DisableInteractiveMode();
+            StateHasChanged();
+        });
+    }
+
+    private void OnClipboardHistoryPressed()
+    {
+        _ = InvokeAsync(() =>
+        {
+            ClipboardHistoryService.Poll();
+            clipboardItems = ClipboardHistoryService.Items.ToList();
+            showClipboardHistory = !showClipboardHistory;
+            MauiProgram.OpenInteractiveMode();
+            StateHasChanged();
+        });
+    }
+
+    private void OnClipboardHistoryChanged()
+    {
+        _ = InvokeAsync(() =>
+        {
+            clipboardItems = ClipboardHistoryService.Items.ToList();
+            StateHasChanged();
+        });
+    }
+
+    private void OnScreenshotCaptured(string path)
+    {
+        _ = InvokeAsync(() =>
+        {
+            shellToast = $"Screenshot saved: {Path.GetFileName(path)}";
+            StateHasChanged();
+            _ = Task.Delay(3500).ContinueWith(_ =>
+            {
+                shellToast = "";
+                return InvokeAsync(StateHasChanged);
+            });
+        });
     }
 
     private async Task LoadWeather()
     {
+        string temp = "";
         try
         {
+
             using HttpClient http = new();
 
             string url =
@@ -562,18 +737,17 @@
                 $"&longitude={Config.longi}" +
                 "&current=temperature_2m,weather_code" +
                 "&temperature_unit=fahrenheit";
-
+            temp = url;
             var response = await http.GetFromJsonAsync<WeatherResponse>(url);
-
             if (response?.current != null)
             {
                 Temperature = (int)Math.Round(response.current.temperature_2m);
                 WeatherDescription = GetWeatherDescription(response.current.weather_code);
             }
         }
-        catch
+        catch (Exception ex) 
         {
-            WeatherDescription = "Offline";
+            WeatherDescription = $"Offline - {ex.Message} - {temp}";
         }
 
         LoadingWeather = false;
@@ -651,9 +825,34 @@
         MauiProgram.DisableInteractiveMode();
     }
 
+    private void ActivateAltTabWindow(int index)
+    {
+        if (index < 0 || index >= altTabWindows.Count)
+            return;
+
+        showAltTabMenu = false;
+        OpenWindowsService.ActivateWindow(altTabWindows[index]);
+        openWindows = OpenWindowsService.GetOpenWindows();
+        MauiProgram.DisableInteractiveMode();
+    }
+
     private void ToggleClickable()
     {
         MauiProgram.ToggleClickableMode();
+    }
+
+    private void RestoreClipboardItem(ClipboardHistoryItem item)
+    {
+        ClipboardHistoryService.CopyToClipboard(item);
+        shellToast = "Copied from history";
+        showClipboardHistory = false;
+        MauiProgram.DisableInteractiveMode();
+    }
+
+    private void ClearClipboardHistory()
+    {
+        ClipboardHistoryService.Clear();
+        clipboardItems = ClipboardHistoryService.Items.ToList();
     }
 
     private static string GetWindowLabel(OpenWindowInfo window)
@@ -663,8 +862,29 @@
             : window.ProcessName;
     }
 
+    private static string GetWindowInitial(OpenWindowInfo window)
+    {
+        var label = GetWindowLabel(window);
+        return string.IsNullOrWhiteSpace(label)
+            ? "?"
+            : label[..1].ToUpperInvariant();
+    }
+
+    private static string PreviewClipboardText(string text)
+    {
+        var normalized = text.ReplaceLineEndings(" ").Trim();
+        return normalized.Length <= 180
+            ? normalized
+            : normalized[..180] + "...";
+    }
+
     public void Dispose()
     {
+        MauiProgram.AltTabPressed -= OnAltTabPressed;
+        MauiProgram.AltReleased -= OnAltReleased;
+        MauiProgram.ClipboardHistoryPressed -= OnClipboardHistoryPressed;
+        MauiProgram.ScreenshotCaptured -= OnScreenshotCaptured;
+        ClipboardHistoryService.HistoryChanged -= OnClipboardHistoryChanged;
         _timer?.Dispose();
     }
 
@@ -702,6 +922,252 @@
         position: absolute;
         inset: 0;
         backdrop-filter: blur(60px);
+    }
+
+    .alt-tab-scrim {
+        position: fixed;
+        inset: 0;
+        z-index: 90;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 28px;
+        background: rgba(0,0,0,0.32);
+        backdrop-filter: blur(18px);
+    }
+
+    .alt-tab-menu {
+        width: min(920px, calc(100vw - 56px));
+        max-height: min(680px, calc(100vh - 96px));
+        padding: 16px;
+        border: 1px solid rgba(255,255,255,0.14);
+        border-radius: 8px;
+        background: linear-gradient(145deg, rgba(22,22,24,0.92), rgba(8,8,10,0.88));
+        box-shadow: 0 28px 90px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.08);
+        overflow: hidden;
+    }
+
+    .alt-tab-header {
+        height: 34px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 4px 12px;
+        color: rgba(255,255,255,0.72);
+        font-family: Consolas, monospace;
+        font-size: 13px;
+    }
+
+    .alt-tab-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+        gap: 10px;
+        overflow-y: auto;
+        max-height: calc(min(680px, calc(100vh - 96px)) - 66px);
+        padding-right: 4px;
+    }
+
+    .alt-tab-card {
+        position: relative;
+        min-height: 118px;
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 8px;
+        padding: 14px;
+        background: rgba(255,255,255,0.055);
+        color: white;
+        cursor: pointer;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 12px;
+        text-align: left;
+        overflow: hidden;
+        transition: transform 0.14s ease, background 0.14s ease, border-color 0.14s ease, box-shadow 0.14s ease;
+    }
+
+        .alt-tab-card:hover,
+        .alt-tab-card.selected {
+            background: rgba(255,255,255,0.13);
+            border-color: rgba(255,255,255,0.34);
+            box-shadow: 0 0 0 1px rgba(91,170,255,0.34), 0 16px 42px rgba(0,0,0,0.42);
+            transform: translateY(-2px);
+        }
+
+        .alt-tab-card.selected::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            border-radius: inherit;
+            background: linear-gradient(135deg, rgba(91,170,255,0.22), rgba(255,255,255,0.02));
+            pointer-events: none;
+        }
+
+    .alt-tab-icon {
+        width: 42px;
+        height: 42px;
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: linear-gradient(135deg, #2f8cff, #8c5cff);
+        color: white;
+        font-size: 20px;
+        font-weight: 800;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.24), 0 10px 26px rgba(0,0,0,0.3);
+        flex: 0 0 auto;
+    }
+
+    .alt-tab-text {
+        position: relative;
+        z-index: 1;
+        width: 100%;
+        min-width: 0;
+    }
+
+    .alt-tab-title {
+        font-size: 14px;
+        font-weight: 700;
+        line-height: 1.25;
+        color: rgba(255,255,255,0.95);
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+    }
+
+    .alt-tab-process {
+        margin-top: 6px;
+        font-size: 12px;
+        color: rgba(255,255,255,0.54);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .alt-tab-pill {
+        position: absolute;
+        top: 12px;
+        right: 12px;
+        z-index: 1;
+        border-radius: 999px;
+        padding: 3px 8px;
+        background: rgba(214,167,58,0.22);
+        color: #ffd978;
+        font-size: 11px;
+        font-weight: 700;
+    }
+
+    .clipboard-panel {
+        position: fixed;
+        right: 28px;
+        bottom: 72px;
+        z-index: 88;
+        width: min(420px, calc(100vw - 56px));
+        max-height: min(560px, calc(100vh - 110px));
+        border: 1px solid rgba(255,255,255,0.14);
+        border-radius: 8px;
+        background: linear-gradient(145deg, rgba(20,20,22,0.94), rgba(8,8,10,0.9));
+        box-shadow: 0 24px 70px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.08);
+        backdrop-filter: blur(18px);
+        overflow: hidden;
+    }
+
+    .clipboard-header {
+        height: 44px;
+        padding: 0 12px 0 14px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        color: rgba(255,255,255,0.9);
+        font-family: Consolas, monospace;
+        font-size: 13px;
+        border-bottom: 1px solid rgba(255,255,255,0.08);
+    }
+
+    .clipboard-clear {
+        border: 1px solid rgba(255,255,255,0.12);
+        border-radius: 6px;
+        height: 28px;
+        padding: 0 10px;
+        background: rgba(255,255,255,0.06);
+        color: rgba(255,255,255,0.74);
+        cursor: pointer;
+        font: inherit;
+    }
+
+        .clipboard-clear:hover {
+            background: rgba(255,255,255,0.12);
+            color: white;
+        }
+
+    .clipboard-list {
+        max-height: calc(min(560px, calc(100vh - 110px)) - 44px);
+        overflow-y: auto;
+        padding: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .clipboard-empty {
+        padding: 24px 10px;
+        text-align: center;
+        color: rgba(255,255,255,0.48);
+        font-size: 13px;
+    }
+
+    .clipboard-item {
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 8px;
+        padding: 10px;
+        background: rgba(255,255,255,0.055);
+        color: white;
+        cursor: pointer;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        text-align: left;
+        transition: background 0.14s ease, border-color 0.14s ease, transform 0.14s ease;
+    }
+
+        .clipboard-item:hover {
+            background: rgba(255,255,255,0.12);
+            border-color: rgba(255,255,255,0.22);
+            transform: translateY(-1px);
+        }
+
+    .clipboard-time {
+        color: rgba(255,255,255,0.48);
+        font-family: Consolas, monospace;
+        font-size: 11px;
+    }
+
+    .clipboard-text {
+        color: rgba(255,255,255,0.9);
+        font-size: 13px;
+        line-height: 1.35;
+        word-break: break-word;
+    }
+
+    .shell-toast {
+        position: fixed;
+        left: 50%;
+        bottom: 72px;
+        transform: translateX(-50%);
+        z-index: 95;
+        max-width: min(520px, calc(100vw - 40px));
+        border: 1px solid rgba(255,255,255,0.14);
+        border-radius: 8px;
+        padding: 10px 14px;
+        background: rgba(12,12,14,0.88);
+        color: rgba(255,255,255,0.92);
+        font-family: Consolas, monospace;
+        font-size: 12px;
+        box-shadow: 0 14px 40px rgba(0,0,0,0.42);
+        backdrop-filter: blur(14px);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
 
     .settings-gear {
@@ -834,12 +1300,28 @@
                 background: #d6a73a;
             }
 
-    .open-app-dot {
-        width: 7px;
-        height: 7px;
-        border-radius: 50%;
-        background: #37c978;
+    .open-app-icon,
+    .open-app-fallback {
+        width: 22px;
+        height: 22px;
         flex: 0 0 auto;
+    }
+
+    .open-app-icon {
+        object-fit: contain;
+    }
+
+    .open-app-fallback {
+        border-radius: 5px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: linear-gradient(135deg, #2f8cff, #8c5cff);
+        color: white;
+        font-size: 12px;
+        font-weight: 800;
+        line-height: 1;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.22);
     }
 
     .open-app-name {
