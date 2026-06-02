@@ -4,6 +4,7 @@ using System.Text;
 
 namespace DesktopWallpaper.Services
 {
+    //not timber. made with codex
     public class TaskbarShortcut
     {
         public string Name { get; set; } = "";
@@ -78,11 +79,7 @@ namespace DesktopWallpaper.Services
                 }
 
                 // Process not running or couldn't determine - launch it
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = shortcut.Path,
-                    UseShellExecute = true
-                });
+                MauiProgram.StartWithFreshEnvironment("explorer.exe", QuoteArgument(shortcut.Path));
             }
             catch
             {
@@ -94,6 +91,11 @@ namespace DesktopWallpaper.Services
             }
 
             await Task.CompletedTask;
+        }
+
+        private static string QuoteArgument(string value)
+        {
+            return "\"" + value.Replace("\"", "\\\"") + "\"";
         }
 
         /// <summary>

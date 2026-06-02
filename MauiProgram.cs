@@ -4,6 +4,7 @@ using Microsoft.Maui.LifecycleEvents;
 #if WINDOWS
 using Microsoft.UI;
 using Microsoft.UI.Windowing;
+using Microsoft.Win32;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Windows.Media.Control;
@@ -13,6 +14,7 @@ using WinUIWindow = Microsoft.UI.Xaml.Window;
 
 namespace DesktopWallpaper
 {
+    //not timber. made with codex
     public static class MauiProgram
     {
 #if WINDOWS
@@ -101,6 +103,9 @@ namespace DesktopWallpaper
         private static IntPtr _oldWndProc;
         private static IntPtr _keyboardHook;
         private static OverlappedPresenter? _presenter;
+        private static System.Threading.Timer? _environmentRefreshTimer;
+        private static readonly object _environmentLock = new();
+        private static Dictionary<string, string> _freshEnvironment = new(StringComparer.OrdinalIgnoreCase);
 
         private static readonly WndProc _wndProc = WndProcHandler;
         private static readonly LowLevelKeyboardProc _keyboardProc = KeyboardHookHandler;
@@ -110,13 +115,16 @@ namespace DesktopWallpaper
         private static bool _winKeyDown;
         private static bool _shiftKeyDown;
         private static bool _altKeyDown;
+        private static bool _startKeyAltChord;
         private static bool _screenSnipHandled;
 
         public static event Action? StartKeyPressed;
+        public static event Action? StartWindowPressed;
         public static event Action? AltTabPressed;
         public static event Action? AltReleased;
         public static event Action? ClipboardHistoryPressed;
         public static event Action<string>? ScreenshotCaptured;
+        public static event Action<int>? VolumeChanged;
 
         private delegate IntPtr WndProc(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
         private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
@@ -256,6 +264,12 @@ namespace DesktopWallpaper
         {
 #if WINDOWS
             KillExplorerShell();
+            RefreshEnvironmentFromRegistry();
+            _environmentRefreshTimer ??= new System.Threading.Timer(
+                _ => RefreshEnvironmentFromRegistry(),
+                null,
+                TimeSpan.FromSeconds(30),
+                TimeSpan.FromSeconds(30));
 #endif
 
             Config.Load();
@@ -318,7 +332,206 @@ namespace DesktopWallpaper
 #endif
         }
 
+        public static Process? StartWithFreshEnvironment(string fileName, string? arguments = null, string? workingDirectory = null)
+        {
 #if WINDOWS
+            RefreshEnvironmentFromRegistry();
+
+            var environment = GetFreshEnvironmentSnapshot();
+            if (ShouldLaunchThroughExplorer(fileName))
+            {
+                arguments = string.IsNullOrWhiteSpace(arguments)
+                    ? QuoteArgument(fileName)
+                    : $"{QuoteArgument(fileName)} {arguments}";
+                fileName = "explorer.exe";
+                workingDirectory = null;
+            }
+
+            var resolvedFileName = ResolveExecutablePath(fileName, environment);
+
+            var psi = new ProcessStartInfo
+            {
+                FileName = resolvedFileName,
+                Arguments = arguments ?? "",
+                UseShellExecute = false,
+                WorkingDirectory = workingDirectory ?? GetWorkingDirectory(resolvedFileName),
+            };
+
+            ApplyEnvironment(psi, environment);
+
+            return Process.Start(psi);
+#else
+            return Process.Start(new ProcessStartInfo
+            {
+                FileName = fileName,
+                Arguments = arguments ?? "",
+                UseShellExecute = true,
+                WorkingDirectory = workingDirectory ?? "",
+            });
+#endif
+        }
+
+        public static void ApplyFreshEnvironment(ProcessStartInfo psi)
+        {
+#if WINDOWS
+            RefreshEnvironmentFromRegistry();
+            ApplyEnvironment(psi, GetFreshEnvironmentSnapshot());
+#endif
+        }
+
+#if WINDOWS
+        public static void RefreshEnvironmentFromRegistry()
+        {
+            try
+            {
+                var environment = Environment.GetEnvironmentVariables()
+                    .Cast<System.Collections.DictionaryEntry>()
+                    .ToDictionary(
+                        entry => entry.Key.ToString() ?? "",
+                        entry => entry.Value?.ToString() ?? "",
+                        StringComparer.OrdinalIgnoreCase);
+
+                MergeRegistryEnvironment(
+                    environment,
+                    Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"));
+                MergeRegistryEnvironment(
+                    environment,
+                    Registry.CurrentUser.OpenSubKey("Environment"));
+
+                ExpandEnvironmentValues(environment);
+
+                lock (_environmentLock)
+                {
+                    _freshEnvironment = environment;
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine(ex);
+            }
+        }
+
+        private static Dictionary<string, string> GetFreshEnvironmentSnapshot()
+        {
+            lock (_environmentLock)
+            {
+                return new Dictionary<string, string>(_freshEnvironment, StringComparer.OrdinalIgnoreCase);
+            }
+        }
+
+        private static void ApplyEnvironment(ProcessStartInfo psi, Dictionary<string, string> environment)
+        {
+            psi.Environment.Clear();
+            foreach (var item in environment)
+            {
+                psi.Environment[item.Key] = item.Value;
+            }
+        }
+
+        private static void MergeRegistryEnvironment(Dictionary<string, string> environment, RegistryKey? key)
+        {
+            using (key)
+            {
+                if (key is null)
+                {
+                    return;
+                }
+
+                foreach (var name in key.GetValueNames())
+                {
+                    var value = key.GetValue(name, "", RegistryValueOptions.DoNotExpandEnvironmentNames)?.ToString() ?? "";
+                    if (string.IsNullOrEmpty(name))
+                    {
+                        continue;
+                    }
+
+                    environment[name] = value;
+                }
+            }
+        }
+
+        private static void ExpandEnvironmentValues(Dictionary<string, string> environment)
+        {
+            foreach (var key in environment.Keys.ToList())
+            {
+                environment[key] = ExpandEnvironmentValue(environment[key], environment);
+            }
+        }
+
+        private static string ExpandEnvironmentValue(string value, Dictionary<string, string> environment)
+        {
+            foreach (var item in environment)
+            {
+                value = value.Replace($"%{item.Key}%", item.Value, StringComparison.OrdinalIgnoreCase);
+            }
+
+            return Environment.ExpandEnvironmentVariables(value);
+        }
+
+        private static string ResolveExecutablePath(string fileName, Dictionary<string, string> environment)
+        {
+            if (Path.IsPathRooted(fileName) || fileName.Contains('\\') || fileName.Contains('/'))
+            {
+                return fileName;
+            }
+
+            var pathExt = environment.TryGetValue("PATHEXT", out var extValue)
+                ? extValue.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                : [".COM", ".EXE", ".BAT", ".CMD"];
+
+            var candidates = Path.HasExtension(fileName)
+                ? [fileName]
+                : pathExt.Select(extension => fileName + extension);
+
+            if (!environment.TryGetValue("PATH", out var pathValue))
+            {
+                return fileName;
+            }
+
+            foreach (var folder in pathValue.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                foreach (var candidate in candidates)
+                {
+                    var fullPath = Path.Combine(folder.Trim('"'), candidate);
+                    if (File.Exists(fullPath))
+                    {
+                        return fullPath;
+                    }
+                }
+            }
+
+            return fileName;
+        }
+
+        private static bool ShouldLaunchThroughExplorer(string fileName)
+        {
+            var extension = Path.GetExtension(fileName);
+            return extension.Equals(".lnk", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".url", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals(".appref-ms", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string QuoteArgument(string value)
+        {
+            return "\"" + value.Replace("\"", "\\\"") + "\"";
+        }
+
+        private static string GetWorkingDirectory(string fileName)
+        {
+            try
+            {
+                if (File.Exists(fileName))
+                {
+                    return Path.GetDirectoryName(fileName) ?? "";
+                }
+            }
+            catch
+            {
+            }
+
+            return "";
+        }
+
         private static void KillExplorerShell()
         {
             try
@@ -475,6 +688,7 @@ namespace DesktopWallpaper
             if (IsWinKey(vkCode))
             {
                 _winKeyDown = true;
+                _startKeyAltChord = _altKeyDown;
                 _screenSnipHandled = false;
                 return 1;
             }
@@ -482,6 +696,11 @@ namespace DesktopWallpaper
             if (IsAltKey(vkCode))
             {
                 _altKeyDown = true;
+                if (_winKeyDown)
+                {
+                    _startKeyAltChord = true;
+                }
+
                 return 1;
             }
 
@@ -535,10 +754,18 @@ namespace DesktopWallpaper
                 if (!_screenSnipHandled)
                 {
                     OpenInteractiveMode();
-                    StartKeyPressed?.Invoke();
+                    if (_startKeyAltChord)
+                    {
+                        StartKeyPressed?.Invoke();
+                    }
+                    else
+                    {
+                        StartWindowPressed?.Invoke();
+                    }
                 }
 
                 _winKeyDown = false;
+                _startKeyAltChord = false;
                 _screenSnipHandled = false;
                 return 1;
             }
@@ -638,6 +865,10 @@ namespace DesktopWallpaper
                         endpointVolume.VolumeStepUp(eventContext);
                         break;
                 }
+
+                endpointVolume.GetMasterVolumeLevelScalar(out var volumeLevel);
+                var volumePercent = Math.Clamp((int)Math.Round(volumeLevel * 100), 0, 100);
+                VolumeChanged?.Invoke(volumePercent);
             }
             catch (Exception ex)
             {

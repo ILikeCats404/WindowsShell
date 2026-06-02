@@ -47,6 +47,7 @@
 <TaskbarBar />
 
 @code {
+    //not timber. made with codex
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
@@ -65,8 +66,7 @@
 #if WINDOWS
         MauiProgram.OpenInteractiveMode();
 #endif
-        var path = new Uri(Navigation.Uri).AbsolutePath.TrimEnd('/');
-        Navigation.NavigateTo(path.Equals("/search", StringComparison.OrdinalIgnoreCase) ? "/" : "/search");
+        Navigation.NavigateTo("/");
     }
 
 #if WINDOWS

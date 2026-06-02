@@ -5,6 +5,7 @@ using Microsoft.Win32;
 
 namespace DesktopWallpaper.Services
 {
+    //not timber. made with codex
     public class SearchResult
     {
         public string Name { get; set; } = "";
@@ -231,15 +232,9 @@ namespace DesktopWallpaper.Services
                     return;
                 }
 
-                if (OperatingSystem.IsWindows() && LaunchWithShellExecute(app.Path))
-                    return;
-
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = app.Path,
-                    UseShellExecute = true,
-                    WorkingDirectory = GetWorkingDirectory(app.Path)
-                });
+                MauiProgram.StartWithFreshEnvironment(
+                    app.Path,
+                    workingDirectory: GetWorkingDirectory(app.Path));
             }
             catch { }
             finally
@@ -252,12 +247,7 @@ namespace DesktopWallpaper.Services
         {
             try
             {
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = "explorer.exe",
-                    Arguments = $"shell:AppsFolder\\{appId}",
-                    UseShellExecute = true
-                });
+                MauiProgram.StartWithFreshEnvironment("explorer.exe", $"shell:AppsFolder\\{appId}");
             }
             catch
             {

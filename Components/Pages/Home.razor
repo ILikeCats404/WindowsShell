@@ -3,11 +3,14 @@
 @using System.Text.Json
 @using System.Net.Http.Json
 @using DesktopWallpaper.Services
+@using Microsoft.AspNetCore.Components.Web
 @using System.Collections.Concurrent;
+@implements IDisposable
 @inject IJSRuntime JS
 @inject TaskbarShortcutsService ShortcutsService
 @inject OpenWindowsService OpenWindowsService
 @inject ClipboardHistoryService ClipboardHistoryService
+@inject AppSearchService SearchService
 @inject NavigationManager Navigation
 
 
@@ -143,6 +146,10 @@
         ⚙
     </button>
 
+    <button class="top-close-button" title="Close" @onclick="closeapp">
+        x
+    </button>
+
     <!-- Click-through status widget -->
     <div class="widget clickthrough-widget">
         @if (!DevStuff.IsClickThrough)
@@ -175,7 +182,16 @@
                                 @onclick="() => ActivateAltTabWindow(index)"
                                 title="@window.Title">
                             <div class="alt-tab-icon">
-                                @GetWindowInitial(window)
+                                @if (!string.IsNullOrWhiteSpace(window.IconBase64))
+                                {
+                                    <img src="data:image/png;base64,@window.IconBase64"
+                                         class="alt-tab-icon-image"
+                                         alt="" />
+                                }
+                                else
+                                {
+                                    @GetWindowInitial(window)
+                                }
                             </div>
 
                             <div class="alt-tab-text">
@@ -188,6 +204,50 @@
                                 <span class="alt-tab-pill">Min</span>
                             }
                         </button>
+                    }
+                </div>
+            </div>
+        </div>
+    }
+
+    @if (showStartWindow)
+    {
+        <div class="start-window">
+            <div class="start-window-header">
+                <span>Start</span>
+                <button class="start-window-close" title="Close" @onclick="CloseStartWindow">x</button>
+            </div>
+
+            <div class="start-window-body">
+                <input type="text"
+                       class="start-search-input"
+                       placeholder="Search for an app..."
+                       @ref="startSearchInput"
+                       @bind="startSearchQuery"
+                       @oninput="OnStartSearchInput"
+                       @onkeydown="OnStartSearchKeyDown" />
+
+                <div class="start-search-results">
+                    @if (startSearchResults != null && startSearchResults.Count > 0)
+                    {
+                        @foreach (var (result, index) in startSearchResults.Select((r, i) => (r, i)))
+                        {
+                            <button class="start-search-result @(startSearchSelectedIndex == index ? "selected" : "")"
+                                    title="@result.Name"
+                                    @onclick="() => SelectStartSearchResult(index)"
+                                    @ondblclick="() => LaunchStartSearchResult(index)"
+                                    @onmousedown:preventDefault="true">
+                                @result.Name
+                            </button>
+                        }
+                    }
+                    else if (!string.IsNullOrWhiteSpace(startSearchQuery))
+                    {
+                        <div class="start-search-empty">No apps found</div>
+                    }
+                    else
+                    {
+                        <div class="start-search-empty">Loading apps...</div>
                     }
                 </div>
             </div>
@@ -226,6 +286,16 @@
     @if (!string.IsNullOrWhiteSpace(shellToast))
     {
         <div class="shell-toast">@shellToast</div>
+    }
+
+    @if (showVolumeOverlay)
+    {
+        <div class="volume-overlay">
+            <div class="volume-percent">@volumePercent%</div>
+            <div class="volume-track">
+                <div class="volume-fill" style="width: @volumePercent%"></div>
+            </div>
+        </div>
     }
 
     <div class="open-apps-bar">
@@ -432,6 +502,7 @@
     };
 </script>
 @code {
+    //not timber. made with codex
     //weather to toggle the weather or not
     private bool PrivacyMode = false;
     //widges
@@ -452,8 +523,16 @@
     private List<ClipboardHistoryItem> clipboardItems = new();
     private bool showAltTabMenu;
     private bool showClipboardHistory;
+    private bool showStartWindow;
     private int altTabSelectedIndex;
     private string shellToast = "";
+    private bool showVolumeOverlay;
+    private int volumePercent;
+    private CancellationTokenSource? volumeOverlayDelay;
+    private string startSearchQuery = "";
+    private List<SearchResult>? startSearchResults;
+    private int startSearchSelectedIndex;
+    private bool shouldFocusStartSearch;
 
     //inbuilt cmd
     Process process = null;
@@ -470,6 +549,7 @@
     //element refereces
     private ElementReference DiscordBox;
     private ElementReference CmdBox;
+    private ElementReference startSearchInput;
     private void togglePrivacy()
     {
         PrivacyMode = !PrivacyMode;
@@ -546,6 +626,7 @@
                 process.StartInfo.RedirectStandardOutput = true;
                 process.StartInfo.UseShellExecute = false;
                 process.StartInfo.CreateNoWindow = true;
+                MauiProgram.ApplyFreshEnvironment(process.StartInfo);
                 process.Start();
                 CmdOut = process.StandardOutput;
                 Cmderr = process.StandardError;
@@ -623,8 +704,10 @@
     {
         MauiProgram.AltTabPressed += OnAltTabPressed;
         MauiProgram.AltReleased += OnAltReleased;
+        MauiProgram.StartWindowPressed += OnStartWindowPressed;
         MauiProgram.ClipboardHistoryPressed += OnClipboardHistoryPressed;
         MauiProgram.ScreenshotCaptured += OnScreenshotCaptured;
+        MauiProgram.VolumeChanged += OnVolumeChanged;
         ClipboardHistoryService.HistoryChanged += OnClipboardHistoryChanged;
 
         DiscordB.selectedId = 0;
@@ -644,6 +727,15 @@
         openWindows = OpenWindowsService.GetOpenWindows();
         clipboardItems = ClipboardHistoryService.Items.ToList();
         await LoadWeather();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (shouldFocusStartSearch)
+        {
+            shouldFocusStartSearch = false;
+            await startSearchInput.FocusAsync();
+        }
     }
 
     private void OnAltTabPressed()
@@ -688,6 +780,101 @@
         });
     }
 
+    private async void OnStartWindowPressed()
+    {
+        await InvokeAsync(async () =>
+        {
+            if (showStartWindow)
+            {
+                CloseStartWindow();
+                return;
+            }
+
+            await OpenStartWindow();
+        });
+    }
+
+    private async Task OpenStartWindow()
+    {
+        startSearchQuery = "";
+        startSearchSelectedIndex = 0;
+        startSearchResults = await SearchService.GetAllAppsAsync();
+        showStartWindow = true;
+        shouldFocusStartSearch = true;
+            showClipboardHistory = false;
+            showAltTabMenu = false;
+            MauiProgram.OpenInteractiveMode();
+            StateHasChanged();
+    }
+
+    private void CloseStartWindow()
+    {
+        showStartWindow = false;
+        startSearchQuery = "";
+        startSearchSelectedIndex = 0;
+        MauiProgram.DisableInteractiveMode();
+    }
+
+    private async Task OnStartSearchInput(ChangeEventArgs e)
+    {
+        startSearchQuery = e.Value?.ToString() ?? "";
+        startSearchSelectedIndex = 0;
+        startSearchResults = await SearchService.SearchAsync(startSearchQuery);
+    }
+
+    private void OnStartSearchKeyDown(KeyboardEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case "Escape":
+                CloseStartWindow();
+                return;
+            case "Enter":
+            case "NumpadEnter":
+                LaunchSelectedStartSearchResult();
+                return;
+        }
+
+        if (startSearchResults is null || startSearchResults.Count == 0)
+        {
+            return;
+        }
+
+        switch (e.Key)
+        {
+            case "ArrowDown":
+                startSearchSelectedIndex = (startSearchSelectedIndex + 1) % startSearchResults.Count;
+                break;
+            case "ArrowUp":
+                startSearchSelectedIndex = (startSearchSelectedIndex - 1 + startSearchResults.Count) % startSearchResults.Count;
+                break;
+        }
+    }
+
+    private void LaunchSelectedStartSearchResult()
+    {
+        if (startSearchResults != null && startSearchSelectedIndex >= 0 && startSearchSelectedIndex < startSearchResults.Count)
+        {
+            LaunchStartSearchResult(startSearchSelectedIndex);
+        }
+    }
+
+    private void SelectStartSearchResult(int index)
+    {
+        startSearchSelectedIndex = index;
+    }
+
+    private void LaunchStartSearchResult(int index)
+    {
+        if (startSearchResults is null || index < 0 || index >= startSearchResults.Count)
+        {
+            return;
+        }
+
+        SearchService.LaunchApp(startSearchResults[index]);
+        showStartWindow = false;
+    }
+
     private void OnClipboardHistoryPressed()
     {
         _ = InvokeAsync(() =>
@@ -720,6 +907,31 @@
                 shellToast = "";
                 return InvokeAsync(StateHasChanged);
             });
+        });
+    }
+
+    private void OnVolumeChanged(int percent)
+    {
+        _ = InvokeAsync(async () =>
+        {
+            volumeOverlayDelay?.Cancel();
+            volumeOverlayDelay?.Dispose();
+            volumeOverlayDelay = new CancellationTokenSource();
+            var token = volumeOverlayDelay.Token;
+
+            volumePercent = Math.Clamp(percent, 0, 100);
+            showVolumeOverlay = true;
+            StateHasChanged();
+
+            try
+            {
+                await Task.Delay(1600, token);
+                showVolumeOverlay = false;
+                StateHasChanged();
+            }
+            catch (TaskCanceledException)
+            {
+            }
         });
     }
 
@@ -779,6 +991,20 @@
         Navigation.NavigateTo("/settings");
     }
 
+    private void closeapp()
+    {
+        try
+        {
+            MauiProgram.StartWithFreshEnvironment("explorer.exe");
+            //get current process
+            var process = Process.GetCurrentProcess();
+            process.Kill();
+        }
+        catch
+        {
+        }
+    }
+
     private void OpenExplorer()
     {
         TryStart("explorer.exe");
@@ -798,17 +1024,14 @@
     {
         try
         {
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = process,
-                UseShellExecute = true
-            });
+            MauiProgram.StartWithFreshEnvironment(process);
         }
         catch
         {
         }
         finally
         {
+            showStartWindow = false;
             MauiProgram.DisableInteractiveMode();
         }
     }
@@ -816,6 +1039,7 @@
     async Task Open(TaskbarShortcut item)
     {
         await ShortcutsService.LaunchAsync(item);
+        showStartWindow = false;
     }
 
     private void ActivateWindow(OpenWindowInfo window)
@@ -882,9 +1106,13 @@
     {
         MauiProgram.AltTabPressed -= OnAltTabPressed;
         MauiProgram.AltReleased -= OnAltReleased;
+        MauiProgram.StartWindowPressed -= OnStartWindowPressed;
         MauiProgram.ClipboardHistoryPressed -= OnClipboardHistoryPressed;
         MauiProgram.ScreenshotCaptured -= OnScreenshotCaptured;
+        MauiProgram.VolumeChanged -= OnVolumeChanged;
         ClipboardHistoryService.HistoryChanged -= OnClipboardHistoryChanged;
+        volumeOverlayDelay?.Cancel();
+        volumeOverlayDelay?.Dispose();
         _timer?.Dispose();
     }
 
@@ -1017,6 +1245,13 @@
         flex: 0 0 auto;
     }
 
+    .alt-tab-icon-image {
+        width: 26px;
+        height: 26px;
+        object-fit: contain;
+        display: block;
+    }
+
     .alt-tab-text {
         position: relative;
         z-index: 1;
@@ -1056,6 +1291,124 @@
         font-size: 11px;
         font-weight: 700;
     }
+
+    .start-window {
+        position: fixed;
+        left: 18px;
+        bottom: 72px;
+        z-index: 2147483100;
+        width: min(460px, calc(100vw - 36px));
+        border: 1px solid rgba(255,255,255,0.14);
+        border-radius: 8px;
+        overflow: hidden;
+        background: rgba(12,12,14,0.9);
+        box-shadow: 0 22px 70px rgba(0,0,0,0.52), inset 0 1px 0 rgba(255,255,255,0.08);
+        backdrop-filter: blur(18px);
+        pointer-events: auto;
+    }
+
+    .start-window-header {
+        height: 42px;
+        padding: 0 8px 0 14px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        border-bottom: 1px solid rgba(255,255,255,0.08);
+        color: rgba(255,255,255,0.92);
+        font-family: Consolas, monospace;
+        font-size: 13px;
+        font-weight: 700;
+    }
+
+    .start-window-close {
+        width: 28px;
+        height: 28px;
+        border: 1px solid rgba(255,255,255,0.12);
+        border-radius: 6px;
+        background: rgba(255,255,255,0.06);
+        color: rgba(255,255,255,0.72);
+        cursor: pointer;
+        font-family: Consolas, monospace;
+        font-size: 14px;
+        font-weight: 700;
+        line-height: 1;
+    }
+
+        .start-window-close:hover {
+            background: rgba(255,255,255,0.13);
+            color: white;
+        }
+
+    .start-window-body {
+        padding: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+    }
+
+    .start-search-input {
+        width: 100%;
+        height: 42px;
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 6px;
+        padding: 0 12px;
+        background: rgba(255,255,255,0.06);
+        color: white;
+        outline: none;
+        font-family: "Segoe UI", sans-serif;
+        font-size: 15px;
+    }
+
+        .start-search-input:focus {
+            background: rgba(255,255,255,0.09);
+            border-color: rgba(255,255,255,0.22);
+        }
+
+        .start-search-input::placeholder {
+            color: rgba(255,255,255,0.42);
+        }
+
+    .start-search-results {
+        max-height: min(430px, calc(100vh - 180px));
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .start-search-result {
+        min-height: 38px;
+        border: 0;
+        border-bottom: 1px solid rgba(255,255,255,0.04);
+        padding: 0 12px;
+        background: transparent;
+        color: rgba(255,255,255,0.88);
+        cursor: pointer;
+        text-align: left;
+        font-family: "Segoe UI", sans-serif;
+        font-size: 14px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+        .start-search-result:hover {
+            background: rgba(255,255,255,0.08);
+            color: white;
+        }
+
+        .start-search-result.selected {
+            background: rgba(84,168,255,0.18);
+            box-shadow: inset 3px 0 0 rgba(84,168,255,0.78);
+            color: white;
+        }
+
+    .start-search-empty {
+        padding: 28px 12px;
+        color: rgba(255,255,255,0.46);
+        text-align: center;
+        font-size: 14px;
+        font-family: "Segoe UI", sans-serif;
+        }
 
     .clipboard-panel {
         position: fixed;
@@ -1170,6 +1523,60 @@
         white-space: nowrap;
     }
 
+    .volume-overlay {
+        position: fixed;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        z-index: 2147483100;
+        width: min(340px, calc(100vw - 48px));
+        border: 1px solid rgba(255,255,255,0.16);
+        border-radius: 8px;
+        padding: 18px 20px 16px;
+        background: rgba(10,10,12,0.78);
+        box-shadow: 0 20px 70px rgba(0,0,0,0.46), inset 0 1px 0 rgba(255,255,255,0.08);
+        backdrop-filter: blur(18px);
+        pointer-events: none;
+        animation: volumeOverlayIn 0.14s ease-out;
+    }
+
+    .volume-percent {
+        color: rgba(255,255,255,0.94);
+        font-family: Consolas, monospace;
+        font-size: 32px;
+        font-weight: 800;
+        line-height: 1;
+        text-align: center;
+    }
+
+    .volume-track {
+        height: 8px;
+        margin-top: 14px;
+        border-radius: 999px;
+        overflow: hidden;
+        background: rgba(255,255,255,0.16);
+    }
+
+    .volume-fill {
+        height: 100%;
+        border-radius: inherit;
+        background: linear-gradient(90deg, #2fd179, #54a8ff);
+        box-shadow: 0 0 18px rgba(84,168,255,0.42);
+        transition: width 0.12s ease;
+    }
+
+    @@keyframes volumeOverlayIn {
+        from {
+            opacity: 0;
+            transform: translate(-50%, -46%) scale(0.98);
+        }
+
+        to {
+            opacity: 1;
+            transform: translate(-50%, -50%) scale(1);
+        }
+    }
+
     .settings-gear {
         position: fixed;
         top: 18px;
@@ -1190,6 +1597,32 @@
 
         .settings-gear:hover {
             background: rgba(255,255,255,0.12);
+            transform: translateY(-1px);
+        }
+
+    .top-close-button {
+        position: fixed;
+        top: 18px;
+        right: 18px;
+        z-index: 30;
+        width: 34px;
+        height: 34px;
+        border: 1px solid rgba(255,255,255,0.14);
+        border-radius: 8px;
+        background: rgba(12,12,12,0.42);
+        color: rgba(255,255,255,0.84);
+        cursor: pointer;
+        font-family: Consolas, monospace;
+        font-size: 18px;
+        font-weight: 700;
+        line-height: 1;
+        backdrop-filter: blur(12px);
+        transition: background 0.15s ease, transform 0.15s ease;
+    }
+
+        .top-close-button:hover {
+            background: rgba(255,255,255,0.12);
+            color: white;
             transform: translateY(-1px);
         }
 
