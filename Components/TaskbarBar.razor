@@ -1,0 +1,286 @@
+@using DesktopWallpaper.Services
+@implements IDisposable
+@inject TaskbarShortcutsService ShortcutsService
+@inject OpenWindowsService OpenWindowsService
+
+<div class="open-apps-bar">
+    <div class="bottom-bar-shortcuts">
+        @foreach (var item in shortcuts)
+        {
+            <button class="taskbar-item" @onclick="() => Open(item)" title="@item.Name">
+                @if (!string.IsNullOrEmpty(item.IconBase64))
+                {
+                    <img src="data:image/png;base64,@item.IconBase64"
+                         class="taskbar-icon" />
+                }
+                else
+                {
+                    <div class="taskbar-fallback"></div>
+                }
+            </button>
+        }
+    </div>
+
+    <button class="bottom-bar-clock"
+            title="Focus desktop"
+            @onclick="FocusDesktop">
+        <span>@CurrentTime.ToString("hh:mm:ss tt")</span>
+        <span>@CurrentTime.ToString("HH:mm")</span>
+        <span>@CurrentTime.ToString("MMMM/MM/dd/yy")</span>
+    </button>
+
+    <div class="bottom-bar-windows">
+        @foreach (var window in openWindows)
+        {
+            <button class="open-app-button @(window.IsMinimized ? "minimized" : "")"
+                    title="@window.Title"
+                    @onclick="() => ActivateWindow(window)">
+                @if (!string.IsNullOrWhiteSpace(window.IconBase64))
+                {
+                    <img src="data:image/png;base64,@window.IconBase64"
+                         class="open-app-icon"
+                         alt="" />
+                }
+                else
+                {
+                    <span class="open-app-fallback">@GetWindowInitial(window)</span>
+                }
+                <span class="open-app-name">@GetWindowLabel(window)</span>
+            </button>
+        }
+    </div>
+</div>
+
+<style>
+    .open-apps-bar {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        height: 54px;
+        padding: 7px 12px;
+        background: rgba(12, 12, 12, 0.84);
+        border-top: 1px solid rgba(255,255,255,0.08);
+        backdrop-filter: blur(16px);
+        overflow: hidden;
+        overflow-y: hidden;
+        z-index: 2147483000;
+        pointer-events: auto;
+    }
+
+    .bottom-bar-shortcuts {
+        position: absolute;
+        left: 12px;
+        right: calc(50% + 205px);
+        top: 7px;
+        height: 40px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        overflow-x: auto;
+        overflow-y: hidden;
+        scrollbar-width: none;
+        -ms-overflow-style: none;
+    }
+
+        .bottom-bar-shortcuts::-webkit-scrollbar,
+        .bottom-bar-windows::-webkit-scrollbar {
+            display: none;
+        }
+
+    .bottom-bar-clock {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        border: none;
+        padding: 0;
+        background: transparent;
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        color: rgba(255,255,255,0.92);
+        font-family: Consolas, monospace;
+        font-size: 13px;
+        font-weight: 600;
+        letter-spacing: 0;
+        cursor: pointer;
+        white-space: nowrap;
+    }
+
+        .bottom-bar-clock:hover {
+            color: white;
+        }
+
+    .bottom-bar-windows {
+        position: absolute;
+        left: calc(50% + 205px);
+        right: 12px;
+        top: 7px;
+        height: 40px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        overflow-x: auto;
+        overflow-y: hidden;
+        scrollbar-width: none;
+        -ms-overflow-style: none;
+    }
+
+    .open-app-button {
+        height: 38px;
+        min-width: 150px;
+        max-width: 220px;
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 6px;
+        padding: 0 10px;
+        background: rgba(255,255,255,0.06);
+        color: rgba(255,255,255,0.88);
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        flex: 0 0 auto;
+        font-size: 12px;
+        font-family: "Segoe UI", sans-serif;
+        transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+    }
+
+        .open-app-button:hover {
+            background: rgba(255,255,255,0.12);
+            border-color: rgba(255,255,255,0.16);
+            transform: translateY(-1px);
+        }
+
+        .open-app-button.minimized {
+            color: rgba(255,255,255,0.55);
+        }
+
+            .open-app-button.minimized .open-app-dot {
+                background: #d6a73a;
+            }
+
+    .open-app-icon,
+    .open-app-fallback {
+        width: 22px;
+        height: 22px;
+        flex: 0 0 auto;
+    }
+
+    .open-app-icon {
+        object-fit: contain;
+    }
+
+    .open-app-fallback {
+        border-radius: 5px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: linear-gradient(135deg, #2f8cff, #8c5cff);
+        color: white;
+        font-size: 12px;
+        font-weight: 800;
+        line-height: 1;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.22);
+    }
+
+    .open-app-name {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .taskbar-item {
+        height: 38px;
+        width: 44px;
+        flex: 0 0 44px;
+        padding: 0;
+        border: none;
+        border-radius: 6px;
+        background: transparent;
+        color: white;
+        cursor: pointer;
+        white-space: nowrap;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: background 0.2s ease;
+    }
+
+        .taskbar-item:hover {
+            background: rgba(255, 255, 255, 0.12);
+        }
+
+    .taskbar-icon {
+        width: 24px;
+        height: 24px;
+        object-fit: contain;
+    }
+
+    .taskbar-fallback {
+        width: 24px;
+        height: 24px;
+        background: rgba(255, 255, 255, 0.3);
+        border-radius: 4px;
+    }
+</style>
+
+@code {
+    private DateTime CurrentTime = DateTime.Now;
+    private List<TaskbarShortcut> shortcuts = new();
+    private List<OpenWindowInfo> openWindows = new();
+    private System.Threading.Timer? _timer;
+
+    protected override void OnInitialized()
+    {
+        shortcuts = ShortcutsService.GetShortcuts();
+        openWindows = OpenWindowsService.GetOpenWindows();
+
+        _timer = new System.Threading.Timer(_ =>
+        {
+            CurrentTime = TimeZoneInfo.ConvertTimeBySystemTimeZoneId(
+                DateTime.Now,
+                "Mountain Standard Time");
+            openWindows = OpenWindowsService.GetOpenWindows();
+
+            InvokeAsync(StateHasChanged);
+        }, null, 0, 1000);
+    }
+
+    private async Task Open(TaskbarShortcut item)
+    {
+        await ShortcutsService.LaunchAsync(item);
+    }
+
+    private void ActivateWindow(OpenWindowInfo window)
+    {
+        OpenWindowsService.ToggleWindow(window);
+        openWindows = OpenWindowsService.GetOpenWindows();
+        MauiProgram.DisableInteractiveMode();
+    }
+
+    private void FocusDesktop()
+    {
+        MauiProgram.FocusInteractiveMode();
+    }
+
+    private static string GetWindowLabel(OpenWindowInfo window)
+    {
+        return string.IsNullOrWhiteSpace(window.ProcessName)
+            ? window.Title
+            : window.ProcessName;
+    }
+
+    private static string GetWindowInitial(OpenWindowInfo window)
+    {
+        var label = GetWindowLabel(window);
+        return string.IsNullOrWhiteSpace(label)
+            ? "?"
+            : label[..1].ToUpperInvariant();
+    }
+
+    public void Dispose()
+    {
+        _timer?.Dispose();
+    }
+}

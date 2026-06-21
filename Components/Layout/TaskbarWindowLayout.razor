@@ -1,0 +1,7 @@
+@inherits LayoutComponentBase
+
+@* Minimal layout for the secondary-monitor taskbar window. Deliberately does NOT
+   reuse MainLayout, since MainLayout hooks the global Win-key event and navigates
+   its own webview to "/" -- doing that here would blow up this small window. *@
+
+@Body

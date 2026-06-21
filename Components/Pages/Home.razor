@@ -5,10 +5,11 @@
 @using DesktopWallpaper.Services
 @using Microsoft.AspNetCore.Components.Web
 @using System.Collections.Concurrent;
+@using System.Text
+@using System.Text.RegularExpressions
+@using System.Net
 @implements IDisposable
 @inject IJSRuntime JS
-@inject TaskbarShortcutsService ShortcutsService
-@inject OpenWindowsService OpenWindowsService
 @inject ClipboardHistoryService ClipboardHistoryService
 @inject NavigationManager Navigation
 
@@ -140,7 +141,7 @@
 </style>
 
 
-<div class="dashboard">
+<div class="dashboard css-@Config.cssStyle">
     <button class="settings-gear" title="Settings" @onclick="OpenSettings">
         ⚙
     </button>
@@ -161,6 +162,10 @@
         }
     </div>
     <div class="overlay"></div>
+
+    <div class="center-text-window">
+        <pre class="ansi-codebox">@((MarkupString)(PrivacyMode ? PrivacyCenterText : CenterTextHtml))</pre>
+    </div>
 
     @if (showClipboardHistory)
     {
@@ -206,53 +211,6 @@
         </div>
     }
 
-    <div class="open-apps-bar">
-        <div class="bottom-bar-shortcuts">
-            @foreach (var item in shortcuts)
-            {
-                <button class="taskbar-item" @onclick="() => Open(item)" title="@item.Name">
-                    @if (!string.IsNullOrEmpty(item.IconBase64))
-                    {
-                        <img src="data:image/png;base64,@item.IconBase64"
-                             class="taskbar-icon" />
-                    }
-                    else
-                    {
-                        <div class="taskbar-fallback"></div>
-                    }
-                </button>
-            }
-        </div>
-
-        <button class="bottom-bar-clock"
-                title="Focus desktop"
-                @onclick="FocusDesktop">
-            <span>@CurrentTime.ToString("hh:mm:ss tt")</span>
-            <span>@CurrentTime.ToString("HH:mm")</span>
-            <span>@CurrentTime.ToString("MMMM/MM/dd/yy")</span>
-        </button>
-
-        <div class="bottom-bar-windows">
-            @foreach (var window in openWindows)
-            {
-                <button class="open-app-button @(window.IsMinimized ? "minimized" : "")"
-                        title="@window.Title"
-                        @onclick="() => ActivateWindow(window)">
-                    @if (!string.IsNullOrWhiteSpace(window.IconBase64))
-                    {
-                        <img src="data:image/png;base64,@window.IconBase64"
-                             class="open-app-icon"
-                             alt="" />
-                    }
-                    else
-                    {
-                        <span class="open-app-fallback">@GetWindowInitial(window)</span>
-                    }
-                    <span class="open-app-name">@GetWindowLabel(window)</span>
-                </button>
-            }
-        </div>
-    </div>
     <div class="discord-messages-panel">
 
         <div class="discord-messages-header">
@@ -331,7 +289,7 @@
             {
                 <button class="Toggle-Privacy" @onclick="togglePrivacy">Privacy mode enabled!</button>
             }
-            </div>
+        </div>
 
         <!-- App Buttons -->
         <div class="apps-grid">
@@ -424,9 +382,6 @@
     private string WeatherDescription = "Unknown";
     //??
     private System.Threading.Timer? _timer;
-    //shortcut stuff
-    private List<TaskbarShortcut> shortcuts = new();
-    private List<OpenWindowInfo> openWindows = new();
     private List<ClipboardHistoryItem> clipboardItems = new();
     private bool showClipboardHistory;
     private string shellToast = "";
@@ -542,8 +497,10 @@
             if (line == null)
                 break;
 
-            if (!string.IsNullOrWhiteSpace(line)) {
-                if (line.Contains(Config.privateUsername)){
+            if (!string.IsNullOrWhiteSpace(line))
+            {
+                if (line.Contains(Config.privateUsername))
+                {
                     line = line.Replace(Config.privateUsername, "*****");
                 }
                 QueueItems.Enqueue("[S] " + line);
@@ -568,7 +525,8 @@
                             if (line == null)
                                 break;
 
-                            if (!string.IsNullOrWhiteSpace(line)) {
+                            if (!string.IsNullOrWhiteSpace(line))
+                            {
                                 QueueItems.Enqueue("[ERR] " + line);
                                 await JS.InvokeVoidAsync("scrollElementToBottom", DiscordBox);
                             }
@@ -612,17 +570,202 @@
             CurrentTime = TimeZoneInfo.ConvertTimeBySystemTimeZoneId(
                 DateTime.Now,
                 "Mountain Standard Time");
-            openWindows = OpenWindowsService.GetOpenWindows();
             ClipboardHistoryService.Poll();
 
             InvokeAsync(StateHasChanged);
         }, null, 0, 1000);
         Debug.WriteLine("!!Starting discord bot!!");
         DiscordB.start();
-        shortcuts = ShortcutsService.GetShortcuts();
-        openWindows = OpenWindowsService.GetOpenWindows();
         clipboardItems = ClipboardHistoryService.Items.ToList();
         await LoadWeather();
+        await LoadCenterText();
+    }
+
+    private string CenterTextHtml = "";
+
+    private const string PrivacyCenterText =
+@"      \   /     -----
+       .-.      ---(--) °F
+    ― (   ) ―   - --- mph
+       `-’      - mi
+      /   \     --- in
+                                                       ┌─────────────┐
+┌──────────────────────────────┬───────────────────────┤  --- -- --- ├───────────────────────┬──────────────────────────────┐
+│            Morning           │             Noon      └──────┬──────┘     Evening           │             Night            │
+├──────────────────────────────┼──────────────────────────────┼──────────────────────────────┼──────────────────────────────┤
+│    \  /       -----          │    \  /       -----          │     \   /     -----          │     \   /     -----          │
+│  _ /"".-.      ---(--) °F     │  _ /"".-.     ---(--) °F      │      .-.      ---(--) °F     │      .-.      ---(--) °F     │
+│    \_(   ).   - --- mph      │    \_(   ).   - --- mph      │   ― (   ) ―   - --- mph      │   ― (   ) ―   - --- mph      │
+│    /(___(__)  - mi           │    /(___(__)  - mi           │      `-’      - mi           │      `-’      - mi           │
+│               --- in | -%    │               --- in | -%    │     /   \     --- in | -%    │     /   \     --- in | -%    │
+└──────────────────────────────┴──────────────────────────────┴──────────────────────────────┴──────────────────────────────┘
+                                                       ┌─────────────┐
+┌──────────────────────────────┬───────────────────────┤  --- -- --- ├───────────────────────┬──────────────────────────────┐
+│            Morning           │             Noon      └──────┬──────┘     Evening           │             Night            │
+├──────────────────────────────┼──────────────────────────────┼──────────────────────────────┼──────────────────────────────┤
+│     \   /     -----          │     \   /     -----          │     \   /     -----          │     \   /     -----          │
+│      .-.      ---(--) °F     │      .-.      ---(--) °F     │      .-.      ---(--) °F     │      .-.      ---(--) °F     │
+│   ― (   ) ―   - --- mph      │   ― (   ) ―   - --- mph      │   ― (   ) ―   - --- mph      │   ― (   ) ―   - --- mph      │
+│      `-’      - mi           │      `-’      - mi           │      `-’      - mi           │      `-’      - mi           │
+│     /   \     --- in | -%    │     /   \     --- in | -%    │     /   \     --- in | -%    │     /   \     --- in | -%    │
+└──────────────────────────────┴──────────────────────────────┴──────────────────────────────┴──────────────────────────────┘
+                                                       ┌─────────────┐
+┌──────────────────────────────┬───────────────────────┤  --- -- --- ├───────────────────────┬──────────────────────────────┐
+│            Morning           │             Noon      └──────┬──────┘     Evening           │             Night            │
+├──────────────────────────────┼──────────────────────────────┼──────────────────────────────┼──────────────────────────────┤
+│     \   /     -----          │    \  /       -----          │     \   /     -----          │     \   /     -----          │
+│      .-.      ---(--) °F     │  _ /"".-.     ---(--) °F      │      .-.      ---(--) °F     │      .-.      ---(--) °F     │
+│   ― (   ) ―   - --- mph      │    \_(   ).   - --- mph      │   ― (   ) ―   - --- mph      │   ― (   ) ―   - --- mph      │
+│      `-’      - mi           │    /(___(__)  - mi           │      `-’      - mi           │      `-’      - mi           │
+│     /   \     --- in | -%    │               --- in | -%    │     /   \     --- in | -%    │     /   \     --- in | -%    │
+└──────────────────────────────┴──────────────────────────────┴──────────────────────────────┴──────────────────────────────┘";
+
+    // Edit this to populate the centered text window on the main dashboard.
+    private async Task LoadCenterText()
+    {
+        var weather = new Process();
+
+        weather.StartInfo.FileName = "C:\\Windows\\System32\\curl.exe";
+        weather.StartInfo.Arguments = $"wttr.in/{Config.lat},{Config.longi}";
+        weather.StartInfo.RedirectStandardOutput = true;
+        weather.StartInfo.RedirectStandardError = true;
+        weather.StartInfo.StandardOutputEncoding = Encoding.UTF8;
+        weather.StartInfo.UseShellExecute = false;
+        weather.StartInfo.CreateNoWindow = true;
+        weather.Start();
+        var output = await weather.StandardOutput.ReadToEndAsync();
+        string result = string.Join(
+            Environment.NewLine,
+            output.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None).Skip(1)
+        );
+        result = result.Split("Location:")[0];
+        CenterTextHtml = AnsiToHtml(result);
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private static readonly Dictionary<int, string> AnsiForegroundColors = new()
+    {
+        [30] = "#000000", [31] = "#cc0000", [32] = "#4e9a06", [33] = "#c4a000",
+        [34] = "#3465a4", [35] = "#75507b", [36] = "#06989a", [37] = "#d3d7cf",
+        [90] = "#555753", [91] = "#ef2929", [92] = "#8ae234", [93] = "#fce94f",
+        [94] = "#729fcf", [95] = "#ad7fa8", [96] = "#34e2e2", [97] = "#eeeeec",
+    };
+
+    private static readonly Dictionary<int, string> AnsiBackgroundColors = new()
+    {
+        [40] = "#000000", [41] = "#cc0000", [42] = "#4e9a06", [43] = "#c4a000",
+        [44] = "#3465a4", [45] = "#75507b", [46] = "#06989a", [47] = "#d3d7cf",
+        [100] = "#555753", [101] = "#ef2929", [102] = "#8ae234", [103] = "#fce94f",
+        [104] = "#729fcf", [105] = "#ad7fa8", [106] = "#34e2e2", [107] = "#eeeeec",
+    };
+
+    private static readonly Regex AnsiCsiPattern = new(@"\x1B\[([0-9;]*)([A-Za-z])", RegexOptions.Compiled);
+
+    // Converts a terminal ANSI/SGR-coded string (e.g. curl wttr.in output) into
+    // HTML <span> elements with matching colors/bold, for display inside a
+    // monospace codebox. Non-color CSI sequences (cursor movement, etc.) are dropped.
+    private static string AnsiToHtml(string input)
+    {
+        var sb = new StringBuilder();
+        var spanOpen = false;
+        var bold = false;
+        string? fg = null;
+        string? bg = null;
+        var lastIndex = 0;
+
+        void CloseSpan()
+        {
+            if (spanOpen)
+            {
+                sb.Append("</span>");
+                spanOpen = false;
+            }
+        }
+
+        void OpenSpanIfNeeded()
+        {
+            if (fg is null && bg is null && !bold)
+            {
+                return;
+            }
+
+            var style = new List<string>();
+            if (fg is not null) style.Add($"color:{fg}");
+            if (bg is not null) style.Add($"background-color:{bg}");
+            if (bold) style.Add("font-weight:bold");
+
+            sb.Append("<span style=\"").Append(string.Join(';', style)).Append("\">");
+            spanOpen = true;
+        }
+
+        foreach (Match match in AnsiCsiPattern.Matches(input))
+        {
+            var text = input[lastIndex..match.Index];
+            if (text.Length > 0)
+            {
+                sb.Append(WebUtility.HtmlEncode(text));
+            }
+
+            lastIndex = match.Index + match.Length;
+
+            if (match.Groups[2].Value != "m")
+            {
+                continue;
+            }
+
+            var codesText = match.Groups[1].Value;
+            var codes = codesText.Length == 0
+                ? new[] { 0 }
+                : codesText.Split(';').Select(c => int.TryParse(c, out var n) ? n : 0).ToArray();
+
+            CloseSpan();
+
+            foreach (var code in codes)
+            {
+                switch (code)
+                {
+                    case 0:
+                        fg = null;
+                        bg = null;
+                        bold = false;
+                        break;
+                    case 1:
+                        bold = true;
+                        break;
+                    case 22:
+                        bold = false;
+                        break;
+                    case 39:
+                        fg = null;
+                        break;
+                    case 49:
+                        bg = null;
+                        break;
+                    default:
+                        if (AnsiForegroundColors.TryGetValue(code, out var fgColor))
+                        {
+                            fg = fgColor;
+                        }
+                        else if (AnsiBackgroundColors.TryGetValue(code, out var bgColor))
+                        {
+                            bg = bgColor;
+                        }
+                        break;
+                }
+            }
+
+            OpenSpanIfNeeded();
+        }
+
+        var remaining = input[lastIndex..];
+        if (remaining.Length > 0)
+        {
+            sb.Append(WebUtility.HtmlEncode(remaining));
+        }
+
+        CloseSpan();
+
+        return sb.ToString();
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -656,7 +799,7 @@
         {
             shellToast = $"Screenshot saved: {Path.GetFileName(path)}";
             StateHasChanged();
-            _ = Task.Delay(3500).ContinueWith(_ =>
+            _ = Task.Delay(10500).ContinueWith(_ =>
             {
                 shellToast = "";
                 return InvokeAsync(StateHasChanged);
@@ -705,13 +848,14 @@
                 "&temperature_unit=fahrenheit";
             temp = url;
             var response = await http.GetFromJsonAsync<WeatherResponse>(url);
+           
             if (response?.current != null)
             {
                 Temperature = (int)Math.Round(response.current.temperature_2m);
                 WeatherDescription = GetWeatherDescription(response.current.weather_code);
             }
         }
-        catch (Exception ex) 
+        catch (Exception ex)
         {
             WeatherDescription = $"Offline - {ex.Message} - {temp}";
         }
@@ -789,23 +933,6 @@
         }
     }
 
-    async Task Open(TaskbarShortcut item)
-    {
-        await ShortcutsService.LaunchAsync(item);
-    }
-
-    private void ActivateWindow(OpenWindowInfo window)
-    {
-        OpenWindowsService.ToggleWindow(window);
-        openWindows = OpenWindowsService.GetOpenWindows();
-        MauiProgram.DisableInteractiveMode();
-    }
-
-    private void FocusDesktop()
-    {
-        MauiProgram.FocusInteractiveMode();
-    }
-
     private void RestoreClipboardItem(ClipboardHistoryItem item)
     {
         ClipboardHistoryService.CopyToClipboard(item);
@@ -818,21 +945,6 @@
     {
         ClipboardHistoryService.Clear();
         clipboardItems = ClipboardHistoryService.Items.ToList();
-    }
-
-    private static string GetWindowLabel(OpenWindowInfo window)
-    {
-        return string.IsNullOrWhiteSpace(window.ProcessName)
-            ? window.Title
-            : window.ProcessName;
-    }
-
-    private static string GetWindowInitial(OpenWindowInfo window)
-    {
-        var label = GetWindowLabel(window);
-        return string.IsNullOrWhiteSpace(label)
-            ? "?"
-            : label[..1].ToUpperInvariant();
     }
 
     private static string PreviewClipboardText(string text)
@@ -888,6 +1000,34 @@
         position: absolute;
         inset: 0;
         backdrop-filter: blur(60px);
+    }
+
+    .center-text-window {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        z-index: 3;
+        padding: 16px 24px;
+        background: rgba(18, 18, 18, 0.65);
+        border-radius: 18px;
+        backdrop-filter: blur(28px);
+        box-shadow: 0 0 20px rgba(0,0,0,0.3), inset 0 0 10px rgba(255,255,255,0.02);
+        color: #d3d7cf;
+        pointer-events: none;
+        max-width: 90vw;
+        max-height: 80vh;
+        overflow: auto;
+
+    }
+
+    .ansi-codebox {
+        margin: 0;
+        font-family: Consolas, "Cascadia Code", monospace;
+        font-size: 11px;
+        line-height: 1.2;
+        white-space: pre;
+        text-align: left;
     }
 
     .alt-tab-scrim {
@@ -959,14 +1099,14 @@
             transform: translateY(-2px);
         }
 
-        .alt-tab-card.selected::before {
-            content: "";
-            position: absolute;
-            inset: 0;
-            border-radius: inherit;
-            background: linear-gradient(135deg, rgba(91,170,255,0.22), rgba(255,255,255,0.02));
-            pointer-events: none;
-        }
+            .alt-tab-card.selected::before {
+                content: "";
+                position: absolute;
+                inset: 0;
+                border-radius: inherit;
+                background: linear-gradient(135deg, rgba(91,170,255,0.22), rgba(255,255,255,0.02));
+                pointer-events: none;
+            }
 
     .alt-tab-icon {
         width: 42px;
@@ -1146,7 +1286,7 @@
         text-align: center;
         font-size: 14px;
         font-family: "Segoe UI", sans-serif;
-        }
+    }
 
     .clipboard-panel {
         position: fixed;
@@ -1395,10 +1535,10 @@
         -ms-overflow-style: none;
     }
 
-    .bottom-bar-shortcuts::-webkit-scrollbar,
-    .bottom-bar-windows::-webkit-scrollbar {
-        display: none;
-    }
+        .bottom-bar-shortcuts::-webkit-scrollbar,
+        .bottom-bar-windows::-webkit-scrollbar {
+            display: none;
+        }
 
     .bottom-bar-clock {
         position: absolute;
@@ -1420,9 +1560,9 @@
         white-space: nowrap;
     }
 
-    .bottom-bar-clock:hover {
-        color: white;
-    }
+        .bottom-bar-clock:hover {
+            color: white;
+        }
 
     .bottom-bar-windows {
         position: absolute;
@@ -1515,7 +1655,6 @@
 
     .widget {
         background: rgba(18, 18, 18, 0.45);
-        border: 1px solid rgba(255,255,255,0.05);
         border-radius: 18px;
         padding: 16px;
         backdrop-filter: blur(28px);
@@ -1595,26 +1734,27 @@
         border: none;
         padding: 0;
         /*
-        background: linear-gradient(135deg, #5d00ff, #2b0058);
-        */
+            background: linear-gradient(135deg, #5d00ff, #2b0058);
+            */
     }
 
     .termius-icon {
         width: 122px;
         height: 122px;
         object-fit: contain;
-            display: block;
+        display: block;
     }
 
     .icon-image {
         width: 42px;
         height: 42px;
         object-fit: contain;
-        
     }
+
     .filter {
         filter: brightness(0) invert(1);
     }
+
     .emoji-icon {
         font-size: 42px;
     }
@@ -1643,9 +1783,9 @@
         transition: background 0.2s ease;
     }
 
-    .taskbar-item:hover {
-        background: rgba(255, 255, 255, 0.12);
-    }
+        .taskbar-item:hover {
+            background: rgba(255, 255, 255, 0.12);
+        }
 
     .taskbar-icon {
         width: 24px;
@@ -1920,6 +2060,205 @@
             background-color: rgba(79, 84, 92, 0.24);
             color: #ffffff;
         }
+
+    .dashboard.css-2 {
+        font-family: "Cascadia Code", "Consolas", monospace;
+        background: linear-gradient(115deg, rgba(4, 24, 20, 0.95) 0%, rgba(6, 8, 11, 0.92) 38%, rgba(15, 18, 13, 0.96) 100%), repeating-linear-gradient(135deg, rgba(139, 255, 127, 0.08) 0 1px, transparent 1px 34px);
+    }
+
+        .dashboard.css-2::before,
+        .dashboard.css-2::after {
+            content: "";
+            position: absolute;
+            inset: -18%;
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        .dashboard.css-2::before {
+            background: radial-gradient(circle at 18% 26%, rgba(96, 255, 148, 0.22), transparent 15%), radial-gradient(circle at 78% 18%, rgba(0, 214, 255, 0.18), transparent 18%), radial-gradient(circle at 68% 78%, rgba(255, 205, 87, 0.15), transparent 20%);
+            filter: saturate(1.5);
+            animation: linuxGlowDrift 18s ease-in-out infinite alternate;
+        }
+
+        .dashboard.css-2::after {
+            background: linear-gradient(90deg, transparent 0 49%, rgba(144, 255, 129, 0.08) 50%, transparent 51%), repeating-linear-gradient(0deg, rgba(255,255,255,0.035) 0 1px, transparent 1px 7px);
+            opacity: 0.45;
+            mix-blend-mode: screen;
+            animation: scanSweep 12s linear infinite;
+        }
+
+        .dashboard.css-2 .overlay {
+            z-index: 1;
+            backdrop-filter: blur(18px) contrast(1.12);
+            background: repeating-linear-gradient(90deg, rgba(144,255,129,0.06) 0 1px, transparent 1px 76px), repeating-linear-gradient(0deg, rgba(0,214,255,0.04) 0 1px, transparent 1px 58px);
+            mask-image: linear-gradient(to bottom, black, rgba(0,0,0,0.72));
+        }
+
+        /* Left-edge dock, GNOME/Pop!_OS style: flush against the screen edge,
+           vertically centered, nothing tilted. */
+        .dashboard.css-2 .dock {
+            top: 50%;
+            left: 18px;
+            transform: translateY(-50%);
+            width: 210px;
+            gap: 16px;
+        }
+
+        .dashboard.css-2 .widget,
+        .dashboard.css-2 .queue-terminal,
+        .dashboard.css-2 .discord-messages-panel,
+        .dashboard.css-2 .clipboard-panel,
+        .dashboard.css-2 .volume-overlay {
+            background: rgba(3, 12, 10, 0.74);
+            border: 1px solid rgba(132, 255, 150, 0.22);
+            border-radius: 7px;
+            box-shadow: 0 18px 50px rgba(0,0,0,0.48), 0 0 30px rgba(86,255,136,0.08), inset 0 1px 0 rgba(255,255,255,0.08);
+            backdrop-filter: blur(12px) saturate(1.25);
+        }
+
+        .dashboard.css-2 .time-widget {
+            border-left: 4px solid #85ff8a;
+        }
+
+        .dashboard.css-2 .weather-widget {
+            border-left: 4px solid #00d6ff;
+        }
+
+        .dashboard.css-2 .apps-grid {
+            gap: 14px;
+        }
+
+        .dashboard.css-2 .app-button {
+            border-radius: 9px;
+            border: 1px solid rgba(255,255,255,0.16);
+            background: rgba(6, 18, 14, 0.8);
+            box-shadow: 0 16px 34px rgba(0,0,0,0.44), inset 0 0 0 1px rgba(132,255,150,0.06);
+        }
+
+            .dashboard.css-2 .app-button:hover {
+                transform: translateY(-6px);
+                box-shadow: 0 22px 48px rgba(0,0,0,0.54), 0 0 24px rgba(132,255,150,0.2);
+            }
+
+        .dashboard.css-2 .discord {
+            background: linear-gradient(145deg, #111827, #3864ff);
+        }
+
+        .dashboard.css-2 .explorer {
+            background: linear-gradient(145deg, #13351f, #1c8c45);
+        }
+
+        .dashboard.css-2 .firefox {
+            background: linear-gradient(145deg, #562900, #d9851c);
+        }
+
+        /* Right-hand column: terminal stacked above the Discord feed, both
+           pinned to the same right margin and same width so the edges line up
+           the way tiled/docked panels do on a Linux desktop. */
+        .dashboard.css-2 .queue-terminal {
+            top: 28px;
+            right: 32px;
+            width: min(460px, 36vw);
+            height: 300px;
+        }
+
+        .dashboard.css-2 .discord-messages-panel {
+            top: 344px;
+            right: 32px;
+            width: min(460px, 36vw);
+            height: 360px;
+        }
+
+        /* Status badge moves out of the middle of the screen and docks under
+           the top-left settings/close controls instead. */
+        .dashboard.css-2 .clickthrough-widget {
+            top: 70px;
+            left: 18px;
+            right: auto;
+            z-index: 21;
+        }
+
+        .dashboard.css-2 .open-apps-bar {
+            height: 62px;
+            padding: 9px 16px;
+            background: rgba(2, 8, 7, 0.9);
+            border-top: 1px solid rgba(132,255,150,0.25);
+            box-shadow: 0 -18px 46px rgba(0,0,0,0.42), 0 0 26px rgba(86,255,136,0.1);
+        }
+
+        .dashboard.css-2 .bottom-bar-clock {
+            color: #d8ffdc;
+            text-shadow: 0 0 10px rgba(132,255,150,0.28);
+        }
+
+        .dashboard.css-2 .taskbar-item,
+        .dashboard.css-2 .open-app-button,
+        .dashboard.css-2 .settings-gear,
+        .dashboard.css-2 .top-close-button {
+            border-radius: 5px;
+            border: 1px solid rgba(132,255,150,0.16);
+            background: rgba(9, 24, 19, 0.68);
+        }
+
+            .dashboard.css-2 .open-app-button:hover,
+            .dashboard.css-2 .taskbar-item:hover,
+            .dashboard.css-2 .settings-gear:hover,
+            .dashboard.css-2 .top-close-button:hover {
+                background: rgba(34, 88, 58, 0.72);
+                border-color: rgba(132,255,150,0.38);
+            }
+
+        .dashboard.css-2 .terminal-topbar,
+        .dashboard.css-2 .discord-messages-header {
+            background: linear-gradient(90deg, rgba(60, 255, 118, 0.16), rgba(0, 214, 255, 0.08));
+            border-bottom-color: rgba(132,255,150,0.18);
+            color: #d8ffdc;
+        }
+
+        .dashboard.css-2 .terminal-line,
+        .dashboard.css-2 .discord-message {
+            color: #dfffe0;
+        }
+
+        .dashboard.css-2 .terminal-input,
+        .dashboard.css-2 .discord-input {
+            border-radius: 5px;
+            background: rgba(0,0,0,0.32);
+            color: #dfffe0;
+        }
+
+    @@keyframes linuxGlowDrift {
+        from {
+            transform: translate(-2%, -1%);
+        }
+
+        to {
+            transform: translate(4%, 3%);
+        }
+    }
+
+    @@keyframes scanSweep {
+        from {
+            background-position: 0 0, 0 0;
+        }
+
+        to {
+            background-position: 120px 0, 0 84px;
+        }
+    }
+
+    @@media (max-width: 900px) {
+        .dashboard.css-2 .queue-terminal,
+        .dashboard.css-2 .discord-messages-panel {
+            width: calc(100vw - 48px);
+            right: 24px;
+        }
+
+        .dashboard.css-2 .dock {
+            left: 24px;
+        }
+    }
 
     .Toggle-Privacy {
         background: none;

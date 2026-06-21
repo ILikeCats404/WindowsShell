@@ -18,6 +18,14 @@
             </label>
 
             <label class="setting-row">
+                <span>CSS style</span>
+                <select @bind="cssStyle">
+                    <option value="1">CSS 1</option>
+                    <option value="2">CSS 2</option>
+                </select>
+            </label>
+
+            <label class="setting-row">
                 <span>Discord channels</span>
                 <textarea @bind="channels" rows="3"></textarea>
             </label>
@@ -63,6 +71,7 @@
     private string privateUsername = "";
     private string discordPath = "";
     private string termiusPath = "";
+    private int cssStyle = 1;
     private string status = "Loaded from config";
 
     protected override void OnInitialized()
@@ -74,6 +83,7 @@
         privateUsername = Config.privateUsername;
         discordPath = Config.discordPath;
         termiusPath = Config.termiusPath;
+        cssStyle = Config.cssStyle;
     }
 
     private void Save()
@@ -85,6 +95,7 @@
         Config.privateUsername = privateUsername;
         Config.discordPath = discordPath;
         Config.termiusPath = termiusPath;
+        Config.cssStyle = Math.Clamp(cssStyle, 1, 2);
         Config.Save();
         status = $"Saved {DateTime.Now:h:mm:ss tt}";
     }
@@ -172,6 +183,7 @@
     }
 
     .setting-row input,
+    .setting-row select,
     .setting-row textarea {
         width: 100%;
         box-sizing: border-box;

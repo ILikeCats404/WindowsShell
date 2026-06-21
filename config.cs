@@ -14,6 +14,7 @@ namespace DesktopWallpaper
         public static string privateUsername = "";
         public static string discordPath = "";
         public static string termiusPath = "";
+        public static int cssStyle = 1;
 
         public static string SettingsFilePath => Path.Combine(FileSystem.AppDataDirectory, "settings.txt");
 
@@ -67,6 +68,12 @@ namespace DesktopWallpaper
                     case nameof(termiusPath):
                         termiusPath = value;
                         break;
+                    case nameof(cssStyle):
+                        if (int.TryParse(value, out var parsedCssStyle))
+                        {
+                            cssStyle = Math.Clamp(parsedCssStyle, 1, 2);
+                        }
+                        break;
                 }
             }
         }
@@ -83,7 +90,8 @@ namespace DesktopWallpaper
                 $"{nameof(lat)}={lat}",
                 $"{nameof(privateUsername)}={privateUsername}",
                 $"{nameof(discordPath)}={discordPath}",
-                $"{nameof(termiusPath)}={termiusPath}"
+                $"{nameof(termiusPath)}={termiusPath}",
+                $"{nameof(cssStyle)}={cssStyle}"
             };
 
             File.WriteAllLines(SettingsFilePath, lines);

@@ -20,6 +20,9 @@ namespace DesktopWallpaper.Services
         private const int SW_RESTORE = 9;
         private const int SW_SHOW = 5;
         private const int WS_EX_TOOLWINDOW = 0x00000080;
+        private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+
+        private static readonly Dictionary<string, string?> IconCache = new(StringComparer.OrdinalIgnoreCase);
 
         private delegate bool EnumWindowsProc(nint hWnd, nint lParam);
 
@@ -53,6 +56,15 @@ namespace DesktopWallpaper.Services
         [DllImport("user32.dll")]
         private static extern nint GetForegroundWindow();
 
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern nint OpenProcess(uint dwDesiredAccess, bool bInheritHandle, uint dwProcessId);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool QueryFullProcessImageName(nint hProcess, int dwFlags, StringBuilder lpExeName, ref int lpdwSize);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool CloseHandle(nint hObject);
+
         public List<OpenWindowInfo> GetOpenWindows()
         {
             if (!OperatingSystem.IsWindows())
@@ -84,17 +96,11 @@ namespace DesktopWallpaper.Services
                 if (string.IsNullOrWhiteSpace(title))
                     return true;
 
-                string processName = "";
-                string? iconBase64 = null;
-                try
-                {
-                    using var process = Process.GetProcessById((int)processId);
-                    processName = process.ProcessName;
-                    iconBase64 = GetProcessIconBase64(process);
-                }
-                catch
-                {
-                }
+                var processPath = GetProcessPath(processId);
+                var processName = string.IsNullOrWhiteSpace(processPath)
+                    ? ""
+                    : Path.GetFileNameWithoutExtension(processPath);
+                var iconBase64 = GetProcessIconBase64(processPath);
 
                 windows.Add(new OpenWindowInfo
                 {
@@ -139,26 +145,60 @@ namespace DesktopWallpaper.Services
             ActivateWindow(window);
         }
 
-        private static string? GetProcessIconBase64(Process process)
+        private static string? GetProcessPath(uint processId)
         {
+            var processHandle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, processId);
+            if (processHandle == 0)
+            {
+                return null;
+            }
+
             try
             {
-                var path = process.MainModule?.FileName;
-                if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
-                    return null;
+                var size = 1024;
+                var pathBuilder = new StringBuilder(size);
+                return QueryFullProcessImageName(processHandle, 0, pathBuilder, ref size)
+                    ? pathBuilder.ToString()
+                    : null;
+            }
+            finally
+            {
+                CloseHandle(processHandle);
+            }
+        }
 
+        private static string? GetProcessIconBase64(string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            {
+                return null;
+            }
+
+            if (IconCache.TryGetValue(path, out var cachedIcon))
+            {
+                return cachedIcon;
+            }
+
+            try
+            {
                 using var icon = System.Drawing.Icon.ExtractAssociatedIcon(path);
                 if (icon is null)
+                {
+                    IconCache[path] = null;
                     return null;
+                }
 
                 using var bmp = icon.ToBitmap();
                 using var ms = new MemoryStream();
                 bmp.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
 
-                return Convert.ToBase64String(ms.ToArray());
+                var iconBase64 = Convert.ToBase64String(ms.ToArray());
+                IconCache[path] = iconBase64;
+                return iconBase64;
             }
             catch
             {
+                IconCache[path] = null;
                 return null;
             }
         }

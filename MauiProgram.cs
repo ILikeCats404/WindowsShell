@@ -44,6 +44,7 @@ namespace DesktopWallpaper
         private const int WS_EX_TOOLWINDOW = 0x00000080;
 
         private const int SW_SHOW = 5;
+        private const int SW_SHOWNOACTIVATE = 4;
 
         // Window messages and keyboard hook constants
         private const int WM_HOTKEY = 0x0312;
@@ -101,6 +102,10 @@ namespace DesktopWallpaper
 
         private const int SM_CXSCREEN = 0;
         private const int SM_CYSCREEN = 1;
+        private const int SM_CMONITORS = 80;
+
+        private const int TASKBAR_HEIGHT = 54;
+        private const uint MONITORINFOF_PRIMARY = 0x1;
 
         private static readonly IntPtr HWND_TOPMOST = new(-1);
         private static readonly IntPtr HWND_NOTOPMOST = new(-2);
@@ -112,10 +117,12 @@ namespace DesktopWallpaper
         private static OverlappedPresenter? _presenter;
         private static Window? _startMenuWindow;
         private static Window? _altTabWindow;
+        private static readonly List<Window> _secondaryTaskbarWindows = new();
+        private static readonly List<IntPtr> _secondaryTaskbarHwnds = new();
         private static Services.AltTabStateService? _altTabStateService;
         private static System.Threading.Timer? _environmentRefreshTimer;
         private static readonly object _environmentLock = new();
-        private static Dictionary<string, string> _freshEnvironment = new(StringComparer.OrdinalIgnoreCase);
+        private static Dictionary<string, string> _freshEnvironment = SnapshotCurrentProcessEnvironment();
 
         private static readonly WndProc _wndProc = WndProcHandler;
         private static readonly LowLevelKeyboardProc _keyboardProc = KeyboardHookHandler;
@@ -175,6 +182,14 @@ namespace DesktopWallpaper
         [DllImport("user32.dll")]
         private static extern int GetSystemMetrics(int nIndex);
 
+        private delegate bool MonitorEnumDelegate(IntPtr hMonitor, IntPtr hdcMonitor, ref RECT lprcMonitor, IntPtr dwData);
+
+        [DllImport("user32.dll")]
+        private static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr lprcClip, MonitorEnumDelegate lpfnEnum, IntPtr dwData);
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto)]
+        private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
+
         [StructLayout(LayoutKind.Sequential)]
         public struct RECT
         {
@@ -182,6 +197,15 @@ namespace DesktopWallpaper
             public int top;
             public int right;
             public int bottom;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct MONITORINFO
+        {
+            public int cbSize;
+            public RECT rcMonitor;
+            public RECT rcWork;
+            public uint dwFlags;
         }
 
         [StructLayout(LayoutKind.Sequential)]
@@ -275,8 +299,8 @@ namespace DesktopWallpaper
             _environmentRefreshTimer ??= new System.Threading.Timer(
                 _ => RefreshEnvironmentFromRegistry(),
                 null,
-                TimeSpan.FromSeconds(30),
-                TimeSpan.FromSeconds(30));
+                TimeSpan.FromSeconds(10),
+                TimeSpan.FromSeconds(10));
 #endif
 
             Config.Load();
@@ -513,33 +537,43 @@ namespace DesktopWallpaper
 #if WINDOWS
         public static void RefreshEnvironmentFromRegistry()
         {
+            // Each step is independently fault-tolerant: a single registry read failing
+            // (e.g. access denied under a locked-down shell token) must never wipe out
+            // the snapshot, since ApplyEnvironment() replaces a child process's entire
+            // environment with whatever is in here.
+            var environment = SnapshotCurrentProcessEnvironment();
+
+            TryMergeRegistryEnvironment(environment, () => Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"));
+            TryMergeRegistryEnvironment(environment, () => Registry.CurrentUser.OpenSubKey("Environment"));
+
             try
             {
-                var environment = Environment.GetEnvironmentVariables()
-                    .Cast<System.Collections.DictionaryEntry>()
-                    .ToDictionary(
-                        entry => entry.Key.ToString() ?? "",
-                        entry => entry.Value?.ToString() ?? "",
-                        StringComparer.OrdinalIgnoreCase);
-
-                MergeRegistryEnvironment(
-                    environment,
-                    Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"));
-                MergeRegistryEnvironment(
-                    environment,
-                    Registry.CurrentUser.OpenSubKey("Environment"));
-
                 ExpandEnvironmentValues(environment);
-
-                lock (_environmentLock)
-                {
-                    _freshEnvironment = environment;
-                }
             }
             catch (Exception ex)
             {
                 Debug.WriteLine(ex);
             }
+
+            if (environment.Count == 0)
+            {
+                return;
+            }
+
+            lock (_environmentLock)
+            {
+                _freshEnvironment = environment;
+            }
+        }
+
+        private static Dictionary<string, string> SnapshotCurrentProcessEnvironment()
+        {
+            return Environment.GetEnvironmentVariables()
+                .Cast<System.Collections.DictionaryEntry>()
+                .ToDictionary(
+                    entry => entry.Key.ToString() ?? "",
+                    entry => entry.Value?.ToString() ?? "",
+                    StringComparer.OrdinalIgnoreCase);
         }
 
         private static Dictionary<string, string> GetFreshEnvironmentSnapshot()
@@ -552,6 +586,13 @@ namespace DesktopWallpaper
 
         private static void ApplyEnvironment(ProcessStartInfo psi, Dictionary<string, string> environment)
         {
+            if (environment.Count == 0)
+            {
+                // Leave psi.Environment untouched (it already inherits the current
+                // process's environment) rather than clearing it down to nothing.
+                return;
+            }
+
             psi.Environment.Clear();
             foreach (var item in environment)
             {
@@ -559,10 +600,11 @@ namespace DesktopWallpaper
             }
         }
 
-        private static void MergeRegistryEnvironment(Dictionary<string, string> environment, RegistryKey? key)
+        private static void TryMergeRegistryEnvironment(Dictionary<string, string> environment, Func<RegistryKey?> openKey)
         {
-            using (key)
+            try
             {
+                using var key = openKey();
                 if (key is null)
                 {
                     return;
@@ -570,14 +612,18 @@ namespace DesktopWallpaper
 
                 foreach (var name in key.GetValueNames())
                 {
-                    var value = key.GetValue(name, "", RegistryValueOptions.DoNotExpandEnvironmentNames)?.ToString() ?? "";
                     if (string.IsNullOrEmpty(name))
                     {
                         continue;
                     }
 
+                    var value = key.GetValue(name, "", RegistryValueOptions.DoNotExpandEnvironmentNames)?.ToString() ?? "";
                     environment[name] = value;
                 }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine(ex);
             }
         }
 
@@ -696,6 +742,12 @@ namespace DesktopWallpaper
                 return;
             }
 
+            if (window.Title?.Contains("Taskbar", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                ConfigureTaskbarWindow(window, hwnd);
+                return;
+            }
+
             ConfigureStartMenuWindow(window, hwnd);
         }
 
@@ -725,6 +777,106 @@ namespace DesktopWallpaper
             RegisterShellHotkeys();
             InstallKeyboardHook();
             InstallWindowProcHook();
+
+            OpenSecondaryTaskbarWindows();
+        }
+
+        private static readonly Dictionary<string, RECT> _pendingTaskbarRects = new();
+
+        private static List<RECT> GetSecondaryMonitorRects()
+        {
+            var rects = new List<RECT>();
+
+            EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (IntPtr hMonitor, IntPtr hdc, ref RECT rect, IntPtr data) =>
+            {
+                var info = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+                if (GetMonitorInfo(hMonitor, ref info) && (info.dwFlags & MONITORINFOF_PRIMARY) == 0)
+                {
+                    rects.Add(info.rcMonitor);
+                }
+
+                return true;
+            }, IntPtr.Zero);
+
+            return rects;
+        }
+
+        // Opens one extra borderless window per non-primary monitor, each hosting
+        // its own copy of the taskbar pinned to that monitor's bottom edge -- a
+        // duplicate of the main taskbar rather than stretching the original across
+        // monitor boundaries.
+        private static void OpenSecondaryTaskbarWindows()
+        {
+            if (GetSystemMetrics(SM_CMONITORS) <= 1)
+            {
+                return;
+            }
+
+            var rects = GetSecondaryMonitorRects();
+            if (rects.Count == 0)
+            {
+                return;
+            }
+
+            MainThread.BeginInvokeOnMainThread(() =>
+            {
+                for (var i = 0; i < rects.Count; i++)
+                {
+                    var title = $"DesktopWallpaper Taskbar {i}";
+                    _pendingTaskbarRects[title] = rects[i];
+
+                    var window = new Window(new TaskbarPage())
+                    {
+                        Title = title,
+                    };
+
+                    _secondaryTaskbarWindows.Add(window);
+                    Application.Current?.OpenWindow(window);
+                }
+            });
+        }
+
+        private static void ConfigureTaskbarWindow(WinUIWindow window, IntPtr hwnd)
+        {
+            _secondaryTaskbarHwnds.Add(hwnd);
+
+            var windowId = Win32Interop.GetWindowIdFromWindow(hwnd);
+            var appWindow = AppWindow.GetFromWindowId(windowId);
+            appWindow.SetPresenter(AppWindowPresenterKind.Overlapped);
+
+            if (appWindow.Presenter is OverlappedPresenter presenter)
+            {
+                presenter.IsMaximizable = false;
+                presenter.IsMinimizable = false;
+                presenter.IsResizable = false;
+                presenter.SetBorderAndTitleBar(false, false);
+            }
+
+            var title = window.Title ?? "";
+            if (!_pendingTaskbarRects.TryGetValue(title, out var monitorRect))
+            {
+                return;
+            }
+
+            _pendingTaskbarRects.Remove(title);
+
+            var x = monitorRect.left;
+            var width = monitorRect.right - monitorRect.left;
+            var y = monitorRect.bottom - TASKBAR_HEIGHT;
+
+            appWindow.Resize(new Windows.Graphics.SizeInt32(width, TASKBAR_HEIGHT));
+            appWindow.Move(new Windows.Graphics.PointInt32(x, y));
+
+            // Never let this window take keyboard focus/activation -- it only exists
+            // to mirror the taskbar onto a second monitor and must not interfere with
+            // the global low-level keyboard hook or steal focus from whatever the
+            // user is typing into.
+            var exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
+            exStyle |= WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
+            SetWindowLong(hwnd, GWL_EXSTYLE, exStyle);
+
+            SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, TASKBAR_HEIGHT, SWP_SHOWWINDOW | SWP_NOACTIVATE);
+            ShowWindow(hwnd, SW_SHOWNOACTIVATE);
         }
 
         private static void ConfigureStartMenuWindow(WinUIWindow window, IntPtr hwnd)
