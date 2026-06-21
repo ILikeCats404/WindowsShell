@@ -1,0 +1,273 @@
+@page "/start"
+@using DesktopWallpaper.Services
+@using Microsoft.AspNetCore.Components.Web
+@inject AppSearchService SearchService
+
+<div class="start-window">
+    <div class="start-window-header">
+        <span>Start</span>
+        <button class="start-window-close" title="Close" @onclick="CloseStartWindow">x</button>
+    </div>
+
+    <div class="start-window-body">
+        <input type="text"
+               class="start-search-input"
+               placeholder="Search for an app..."
+               @ref="startSearchInput"
+               @bind="startSearchQuery"
+               @oninput="OnStartSearchInput"
+               @onkeydown="OnStartSearchKeyDown" />
+
+        <div class="start-search-results">
+            @if (startSearchResults != null && startSearchResults.Count > 0)
+            {
+                @foreach (var (result, index) in startSearchResults.Select((r, i) => (r, i)))
+                {
+                    <button class="start-search-result @(startSearchSelectedIndex == index ? "selected" : "")"
+                            title="@result.Name"
+                            @onclick="() => SelectStartSearchResult(index)"
+                            @ondblclick="() => LaunchStartSearchResult(index)"
+                            @onmousedown:preventDefault="true">
+                        @result.Name
+                    </button>
+                }
+            }
+            else if (!string.IsNullOrWhiteSpace(startSearchQuery))
+            {
+                <div class="start-search-empty">No apps found</div>
+            }
+            else
+            {
+                <div class="start-search-empty">Loading apps...</div>
+            }
+        </div>
+    </div>
+</div>
+
+<style>
+    html,
+    body,
+    #app {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: transparent;
+    }
+
+    .page,
+    main,
+    article.content {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        padding: 0;
+        background: transparent;
+    }
+
+    .taskbar {
+        display: none;
+    }
+
+    .start-window {
+        width: 100vw;
+        height: 100vh;
+        border: 1px solid rgba(255,255,255,0.14);
+        border-radius: 8px;
+        overflow: hidden;
+        background: rgba(12,12,14,0.94);
+        box-shadow: 0 22px 70px rgba(0,0,0,0.52), inset 0 1px 0 rgba(255,255,255,0.08);
+        backdrop-filter: blur(18px);
+    }
+
+    .start-window-header {
+        height: 42px;
+        padding: 0 8px 0 14px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        border-bottom: 1px solid rgba(255,255,255,0.08);
+        color: rgba(255,255,255,0.92);
+        font-family: Consolas, monospace;
+        font-size: 13px;
+        font-weight: 700;
+    }
+
+    .start-window-close {
+        width: 28px;
+        height: 28px;
+        border: 1px solid rgba(255,255,255,0.12);
+        border-radius: 6px;
+        background: rgba(255,255,255,0.06);
+        color: rgba(255,255,255,0.72);
+        cursor: pointer;
+        font-family: Consolas, monospace;
+        font-size: 14px;
+        font-weight: 700;
+        line-height: 1;
+    }
+
+    .start-window-close:hover {
+        background: rgba(255,255,255,0.13);
+        color: white;
+    }
+
+    .start-window-body {
+        padding: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+    }
+
+    .start-search-input {
+        width: 100%;
+        height: 42px;
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 6px;
+        padding: 0 12px;
+        background: rgba(255,255,255,0.06);
+        color: white;
+        outline: none;
+        font-family: "Segoe UI", sans-serif;
+        font-size: 15px;
+        box-sizing: border-box;
+    }
+
+    .start-search-input:focus {
+        background: rgba(255,255,255,0.09);
+        border-color: rgba(255,255,255,0.22);
+    }
+
+    .start-search-input::placeholder {
+        color: rgba(255,255,255,0.42);
+    }
+
+    .start-search-results {
+        max-height: calc(100vh - 106px);
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .start-search-result {
+        min-height: 38px;
+        border: 0;
+        border-bottom: 1px solid rgba(255,255,255,0.04);
+        padding: 0 12px;
+        background: transparent;
+        color: rgba(255,255,255,0.88);
+        cursor: pointer;
+        text-align: left;
+        font-family: "Segoe UI", sans-serif;
+        font-size: 14px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .start-search-result:hover {
+        background: rgba(255,255,255,0.08);
+        color: white;
+    }
+
+    .start-search-result.selected {
+        background: rgba(84,168,255,0.18);
+        box-shadow: inset 3px 0 0 rgba(84,168,255,0.78);
+        color: white;
+    }
+
+    .start-search-empty {
+        padding: 28px 12px;
+        color: rgba(255,255,255,0.46);
+        text-align: center;
+        font-size: 14px;
+        font-family: "Segoe UI", sans-serif;
+    }
+</style>
+
+@code {
+    private string startSearchQuery = "";
+    private List<SearchResult>? startSearchResults;
+    private int startSearchSelectedIndex;
+    private bool shouldFocusStartSearch = true;
+    private ElementReference startSearchInput;
+
+    protected override async Task OnInitializedAsync()
+    {
+        startSearchResults = await SearchService.GetAllAppsAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (shouldFocusStartSearch)
+        {
+            shouldFocusStartSearch = false;
+            await startSearchInput.FocusAsync();
+        }
+    }
+
+    private void CloseStartWindow()
+    {
+        MauiProgram.CloseStartMenuWindow();
+    }
+
+    private async Task OnStartSearchInput(ChangeEventArgs e)
+    {
+        startSearchQuery = e.Value?.ToString() ?? "";
+        startSearchSelectedIndex = 0;
+        startSearchResults = await SearchService.SearchAsync(startSearchQuery);
+    }
+
+    private void OnStartSearchKeyDown(KeyboardEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case "Escape":
+                CloseStartWindow();
+                return;
+            case "Enter":
+            case "NumpadEnter":
+                LaunchSelectedStartSearchResult();
+                return;
+        }
+
+        if (startSearchResults is null || startSearchResults.Count == 0)
+        {
+            return;
+        }
+
+        switch (e.Key)
+        {
+            case "ArrowDown":
+                startSearchSelectedIndex = (startSearchSelectedIndex + 1) % startSearchResults.Count;
+                break;
+            case "ArrowUp":
+                startSearchSelectedIndex = (startSearchSelectedIndex - 1 + startSearchResults.Count) % startSearchResults.Count;
+                break;
+        }
+    }
+
+    private void LaunchSelectedStartSearchResult()
+    {
+        if (startSearchResults != null && startSearchSelectedIndex >= 0 && startSearchSelectedIndex < startSearchResults.Count)
+        {
+            LaunchStartSearchResult(startSearchSelectedIndex);
+        }
+    }
+
+    private void SelectStartSearchResult(int index)
+    {
+        startSearchSelectedIndex = index;
+    }
+
+    private void LaunchStartSearchResult(int index)
+    {
+        if (startSearchResults is null || index < 0 || index >= startSearchResults.Count)
+        {
+            return;
+        }
+
+        SearchService.LaunchApp(startSearchResults[index]);
+        CloseStartWindow();
+    }
+}

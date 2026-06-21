@@ -1,0 +1,205 @@
+@page "/alt-tab"
+@using DesktopWallpaper.Services
+@implements IDisposable
+@inject AltTabStateService AltTabState
+
+<div class="alt-tab-scrim">
+    <div class="alt-tab-menu">
+        <div class="alt-tab-header">
+            <span>Switch windows</span>
+            <span>@(AltTabState.Windows.Count == 0 ? 0 : AltTabState.SelectedIndex + 1) / @AltTabState.Windows.Count</span>
+        </div>
+
+        <div class="alt-tab-grid">
+            @for (var i = 0; i < AltTabState.Windows.Count; i++)
+            {
+                var index = i;
+                var window = AltTabState.Windows[index];
+
+                <button class="alt-tab-card @(index == AltTabState.SelectedIndex ? "selected" : "")"
+                        title="@window.Title">
+                    <div class="alt-tab-icon">
+                        @if (!string.IsNullOrWhiteSpace(window.IconBase64))
+                        {
+                            <img src="data:image/png;base64,@window.IconBase64"
+                                 class="alt-tab-icon-image"
+                                 alt="" />
+                        }
+                        else
+                        {
+                            @GetWindowInitial(window)
+                        }
+                    </div>
+
+                    <div class="alt-tab-text">
+                        <div class="alt-tab-title">@window.Title</div>
+                        <div class="alt-tab-process">@GetWindowLabel(window)</div>
+                    </div>
+
+                    @if (window.IsMinimized)
+                    {
+                        <span class="alt-tab-pill">Min</span>
+                    }
+                </button>
+            }
+        </div>
+    </div>
+</div>
+
+<style>
+    html,
+    body,
+    #app {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: transparent;
+    }
+
+    .page,
+    main,
+    article.content {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        padding: 0;
+        background: transparent;
+    }
+
+    .taskbar {
+        display: none;
+    }
+
+    .alt-tab-scrim {
+        width: 100vw;
+        height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(0,0,0,0.24);
+    }
+
+    .alt-tab-menu {
+        width: min(760px, calc(100vw - 32px));
+        max-height: min(560px, calc(100vh - 32px));
+        padding: 14px;
+        border: 1px solid rgba(255,255,255,0.16);
+        border-radius: 8px;
+        background: rgba(12,12,14,0.92);
+        box-shadow: 0 24px 80px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.08);
+        backdrop-filter: blur(20px);
+    }
+
+    .alt-tab-header {
+        display: flex;
+        justify-content: space-between;
+        color: rgba(255,255,255,0.86);
+        font: 700 13px Consolas, monospace;
+        margin-bottom: 12px;
+    }
+
+    .alt-tab-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+        gap: 10px;
+        max-height: 480px;
+        overflow-y: auto;
+    }
+
+    .alt-tab-card {
+        min-height: 116px;
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 8px;
+        padding: 10px;
+        background: rgba(255,255,255,0.06);
+        color: white;
+        text-align: left;
+        overflow: hidden;
+    }
+
+    .alt-tab-card.selected {
+        border-color: rgba(84,168,255,0.85);
+        background: rgba(84,168,255,0.18);
+        box-shadow: inset 0 0 0 1px rgba(84,168,255,0.42);
+    }
+
+    .alt-tab-icon {
+        width: 38px;
+        height: 38px;
+        display: grid;
+        place-items: center;
+        margin-bottom: 10px;
+        border-radius: 7px;
+        background: rgba(255,255,255,0.08);
+        font: 700 18px "Segoe UI", sans-serif;
+    }
+
+    .alt-tab-icon-image {
+        width: 28px;
+        height: 28px;
+        object-fit: contain;
+    }
+
+    .alt-tab-title,
+    .alt-tab-process {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-family: "Segoe UI", sans-serif;
+    }
+
+    .alt-tab-title {
+        font-size: 13px;
+        color: rgba(255,255,255,0.9);
+    }
+
+    .alt-tab-process {
+        margin-top: 3px;
+        font-size: 12px;
+        color: rgba(255,255,255,0.55);
+    }
+
+    .alt-tab-pill {
+        display: inline-block;
+        margin-top: 8px;
+        padding: 2px 6px;
+        border-radius: 999px;
+        background: rgba(214,167,58,0.22);
+        color: #ffd978;
+        font-size: 11px;
+        font-weight: 700;
+    }
+</style>
+
+@code {
+    protected override void OnInitialized()
+    {
+        AltTabState.Changed += OnAltTabChanged;
+    }
+
+    private void OnAltTabChanged()
+    {
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private static string GetWindowLabel(OpenWindowInfo window)
+    {
+        return string.IsNullOrWhiteSpace(window.ProcessName)
+            ? window.Title
+            : window.ProcessName;
+    }
+
+    private static string GetWindowInitial(OpenWindowInfo window)
+    {
+        var label = GetWindowLabel(window);
+        return string.IsNullOrWhiteSpace(label)
+            ? "?"
+            : label[..1].ToUpperInvariant();
+    }
+
+    public void Dispose()
+    {
+        AltTabState.Changed -= OnAltTabChanged;
+    }
+}

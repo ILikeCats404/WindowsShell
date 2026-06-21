@@ -28,22 +28,25 @@ namespace DesktopWallpaper.Services
             string? lpDirectory,
             int nShowCmd);
 
-        private List<SearchResult> _appCache = new();
-        private bool _cacheInitialized = false;
+        private static readonly SemaphoreSlim CacheLock = new(1, 1);
+        private static List<SearchResult> AppCache = new();
+        private static Task? InitializeCacheTask;
+        private static bool CacheInitialized;
+
+        public void WarmCache()
+        {
+            _ = EnsureCacheAsync();
+        }
 
         public async Task<List<SearchResult>> SearchAsync(string query)
         {
-            // Initialize cache on first search
-            if (!_cacheInitialized)
-            {
-                await InitializeCacheAsync();
-            }
+            await EnsureCacheAsync();
 
             if (string.IsNullOrWhiteSpace(query))
-                return _appCache;
+                return AppCache;
 
             var lowerQuery = query.ToLower();
-            return _appCache
+            return AppCache
                 .Where(a => a.Name.ToLower().Contains(lowerQuery))
                 .OrderBy(a => a.Name)
                 .ToList();
@@ -51,40 +54,57 @@ namespace DesktopWallpaper.Services
 
         public async Task<List<SearchResult>> GetAllAppsAsync()
         {
-            if (!_cacheInitialized)
-            {
-                await InitializeCacheAsync();
-            }
-            return _appCache;
+            await EnsureCacheAsync();
+            return AppCache;
         }
 
-        private async Task InitializeCacheAsync()
+        private static async Task EnsureCacheAsync()
         {
+            if (CacheInitialized)
+            {
+                return;
+            }
+
+            await CacheLock.WaitAsync();
+            try
+            {
+                InitializeCacheTask ??= InitializeCacheAsync();
+            }
+            finally
+            {
+                CacheLock.Release();
+            }
+
+            await InitializeCacheTask;
+        }
+
+        private static async Task InitializeCacheAsync()
+        {
+            var appCache = new List<SearchResult>();
+
             await Task.Run(() =>
             {
-                _appCache.Clear();
-
                 // Search in Start Menu
-                SearchStartMenu();
+                SearchStartMenu(appCache);
 
                 // Search in Registry (App Paths)
-                SearchRegistry();
+                SearchRegistry(appCache);
 
                 // Search Microsoft Store / packaged apps
-                SearchStoreApps();
+                SearchStoreApps(appCache);
 
                 // Remove duplicates
-                _appCache = _appCache
+                AppCache = appCache
                     .GroupBy(a => a.Name.ToLower())
                     .Select(g => g.First())
                     .OrderBy(a => a.Name)
                     .ToList();
             });
 
-            _cacheInitialized = true;
+            CacheInitialized = true;
         }
 
-        private void SearchStartMenu()
+        private static void SearchStartMenu(List<SearchResult> appCache)
         {
             var folders = new[]
             {
@@ -101,11 +121,11 @@ namespace DesktopWallpaper.Services
 
             foreach (var folder in folders.Distinct(StringComparer.OrdinalIgnoreCase))
             {
-                SearchStartMenuFolder(folder);
+                SearchStartMenuFolder(folder, appCache);
             }
         }
 
-        private void SearchStartMenuFolder(string folder)
+        private static void SearchStartMenuFolder(string folder, List<SearchResult> appCache)
         {
             try
             {
@@ -122,7 +142,7 @@ namespace DesktopWallpaper.Services
                 foreach (var file in files)
                 {
                     string name = Path.GetFileNameWithoutExtension(file);
-                    _appCache.Add(new SearchResult
+                    appCache.Add(new SearchResult
                     {
                         Name = name,
                         Path = file,
@@ -135,7 +155,7 @@ namespace DesktopWallpaper.Services
             }
         }
 
-        private void SearchRegistry()
+        private static void SearchRegistry(List<SearchResult> appCache)
         {
             try
             {
@@ -155,10 +175,10 @@ namespace DesktopWallpaper.Services
                             string appName = subKeyName.Replace(".exe", "", StringComparison.OrdinalIgnoreCase);
 
                             // Skip if already have this app
-                            if (_appCache.Any(a => a.Name.Equals(appName, StringComparison.OrdinalIgnoreCase)))
+                            if (appCache.Any(a => a.Name.Equals(appName, StringComparison.OrdinalIgnoreCase)))
                                 continue;
 
-                            _appCache.Add(new SearchResult
+                            appCache.Add(new SearchResult
                             {
                                 Name = appName,
                                 Path = defaultValue,
@@ -172,7 +192,7 @@ namespace DesktopWallpaper.Services
             catch { }
         }
 
-        private void SearchStoreApps()
+        private static void SearchStoreApps(List<SearchResult> appCache)
         {
             try
             {
@@ -205,7 +225,7 @@ namespace DesktopWallpaper.Services
                     if (string.IsNullOrWhiteSpace(app.Name) || string.IsNullOrWhiteSpace(app.AppID))
                         continue;
 
-                    _appCache.Add(new SearchResult
+                    appCache.Add(new SearchResult
                     {
                         Name = app.Name,
                         Path = app.AppID,

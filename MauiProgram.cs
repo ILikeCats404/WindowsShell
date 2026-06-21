@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Maui.LifecycleEvents;
 
 #if WINDOWS
@@ -93,16 +94,25 @@ namespace DesktopWallpaper
         private const uint ABE_BOTTOM = 3;
 
         private const uint SWP_NOZORDER = 0x0004;
+        private const uint SWP_NOMOVE = 0x0002;
+        private const uint SWP_NOSIZE = 0x0001;
         private const uint SWP_NOACTIVATE = 0x0010;
         private const uint SWP_SHOWWINDOW = 0x0040;
 
         private const int SM_CXSCREEN = 0;
         private const int SM_CYSCREEN = 1;
 
+        private static readonly IntPtr HWND_TOPMOST = new(-1);
+        private static readonly IntPtr HWND_NOTOPMOST = new(-2);
+
         private static IntPtr _hwnd;
+        private static IntPtr _startMenuHwnd;
         private static IntPtr _oldWndProc;
         private static IntPtr _keyboardHook;
         private static OverlappedPresenter? _presenter;
+        private static Window? _startMenuWindow;
+        private static Window? _altTabWindow;
+        private static Services.AltTabStateService? _altTabStateService;
         private static System.Threading.Timer? _environmentRefreshTimer;
         private static readonly object _environmentLock = new();
         private static Dictionary<string, string> _freshEnvironment = new(StringComparer.OrdinalIgnoreCase);
@@ -119,9 +129,6 @@ namespace DesktopWallpaper
         private static bool _screenSnipHandled;
 
         public static event Action? StartKeyPressed;
-        public static event Action? StartWindowPressed;
-        public static event Action? AltTabPressed;
-        public static event Action? AltReleased;
         public static event Action? ClipboardHistoryPressed;
         public static event Action<string>? ScreenshotCaptured;
         public static event Action<int>? VolumeChanged;
@@ -295,6 +302,7 @@ namespace DesktopWallpaper
             builder.Services.AddSingleton<DesktopWallpaper.Services.AppSearchService>();
             builder.Services.AddSingleton<DesktopWallpaper.Services.OpenWindowsService>();
             builder.Services.AddSingleton<DesktopWallpaper.Services.ClipboardHistoryService>();
+            builder.Services.AddSingleton<DesktopWallpaper.Services.AltTabStateService>();
 
             builder.ConfigureLifecycleEvents(events =>
             {
@@ -306,7 +314,11 @@ namespace DesktopWallpaper
 #endif
             });
 
-            return builder.Build();
+            var app = builder.Build();
+            app.Services.GetRequiredService<DesktopWallpaper.Services.AppSearchService>().WarmCache();
+            _altTabStateService = app.Services.GetRequiredService<DesktopWallpaper.Services.AltTabStateService>();
+
+            return app;
         }
 
         public static void DisableInteractiveMode()
@@ -320,7 +332,106 @@ namespace DesktopWallpaper
             _clickThrough = true;
             DevStuff.IsClickThrough = true;
             ApplyClickThrough(_hwnd, true);
+            SetWindowPos(_hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 #endif
+        }
+
+        public static void OpenStartMenuWindow()
+        {
+            MainThread.BeginInvokeOnMainThread(() =>
+            {
+                if (_startMenuWindow is not null)
+                {
+                    CloseStartMenuWindow();
+                    return;
+                }
+
+                _startMenuWindow = new Window(new StartMenuPage())
+                {
+                    Title = "DesktopWallpaper Start",
+                    Width = 460,
+                    Height = 560,
+                };
+
+                _startMenuWindow.Destroying += (_, _) =>
+                {
+                    _startMenuWindow = null;
+                    _startMenuHwnd = IntPtr.Zero;
+                };
+
+                Application.Current?.OpenWindow(_startMenuWindow);
+            });
+        }
+
+        public static void CloseStartMenuWindow()
+        {
+            MainThread.BeginInvokeOnMainThread(() =>
+            {
+                if (_startMenuWindow is null)
+                {
+                    return;
+                }
+
+                Application.Current?.CloseWindow(_startMenuWindow);
+                _startMenuWindow = null;
+                _startMenuHwnd = IntPtr.Zero;
+            });
+        }
+
+        public static void OpenOrCycleAltTabWindow()
+        {
+            MainThread.BeginInvokeOnMainThread(() =>
+            {
+                if (_altTabStateService is null)
+                {
+                    return;
+                }
+
+                if (_altTabWindow is not null)
+                {
+                    _altTabStateService.Cycle();
+                    return;
+                }
+
+                _altTabStateService.Start();
+                if (_altTabStateService.Windows.Count == 0)
+                {
+                    return;
+                }
+
+                _altTabWindow = new Window(new AltTabPage())
+                {
+                    Title = "DesktopWallpaper AltTab",
+                    Width = 820,
+                    Height = 620,
+                };
+
+                _altTabWindow.Destroying += (_, _) =>
+                {
+                    _altTabWindow = null;
+                };
+
+                Application.Current?.OpenWindow(_altTabWindow);
+            });
+        }
+
+        public static void CloseAltTabWindow(bool activateSelected)
+        {
+            MainThread.BeginInvokeOnMainThread(() =>
+            {
+                if (activateSelected)
+                {
+                    _altTabStateService?.ActivateSelected();
+                }
+
+                if (_altTabWindow is null)
+                {
+                    return;
+                }
+
+                Application.Current?.CloseWindow(_altTabWindow);
+                _altTabWindow = null;
+            });
         }
 
         public static void ToggleClickableMode()
@@ -552,7 +663,25 @@ namespace DesktopWallpaper
 
         private static void ConfigureWindowsShellWindow(WinUIWindow window)
         {
-            _hwnd = WindowNative.GetWindowHandle(window);
+            var hwnd = WindowNative.GetWindowHandle(window);
+            if (_hwnd == IntPtr.Zero)
+            {
+                ConfigureMainShellWindow(window, hwnd);
+                return;
+            }
+
+            if (window.Title?.Contains("AltTab", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                ConfigureAltTabWindow(window, hwnd);
+                return;
+            }
+
+            ConfigureStartMenuWindow(window, hwnd);
+        }
+
+        private static void ConfigureMainShellWindow(WinUIWindow window, IntPtr hwnd)
+        {
+            _hwnd = hwnd;
 
             var windowId = Win32Interop.GetWindowIdFromWindow(_hwnd);
             var appWindow = AppWindow.GetFromWindowId(windowId);
@@ -576,6 +705,65 @@ namespace DesktopWallpaper
             RegisterShellHotkeys();
             InstallKeyboardHook();
             InstallWindowProcHook();
+        }
+
+        private static void ConfigureStartMenuWindow(WinUIWindow window, IntPtr hwnd)
+        {
+            _startMenuHwnd = hwnd;
+
+            var windowId = Win32Interop.GetWindowIdFromWindow(hwnd);
+            var appWindow = AppWindow.GetFromWindowId(windowId);
+            appWindow.SetPresenter(AppWindowPresenterKind.Overlapped);
+
+            if (appWindow.Presenter is OverlappedPresenter presenter)
+            {
+                presenter.IsMaximizable = false;
+                presenter.IsMinimizable = false;
+                presenter.IsResizable = false;
+                presenter.SetBorderAndTitleBar(false, false);
+            }
+
+            var width = 460;
+            var height = 560;
+            var x = 18;
+            var y = Math.Max(18, GetSystemMetrics(SM_CYSCREEN) - height - 72);
+            appWindow.Resize(new Windows.Graphics.SizeInt32(width, height));
+            appWindow.Move(new Windows.Graphics.PointInt32(x, y));
+
+            var exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
+            exStyle |= WS_EX_TOOLWINDOW | WS_EX_LAYERED;
+            SetWindowLong(hwnd, GWL_EXSTYLE, exStyle);
+            SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW);
+            ShowWindow(hwnd, SW_SHOW);
+            SetForegroundWindow(hwnd);
+        }
+
+        private static void ConfigureAltTabWindow(WinUIWindow window, IntPtr hwnd)
+        {
+            var windowId = Win32Interop.GetWindowIdFromWindow(hwnd);
+            var appWindow = AppWindow.GetFromWindowId(windowId);
+            appWindow.SetPresenter(AppWindowPresenterKind.Overlapped);
+
+            if (appWindow.Presenter is OverlappedPresenter presenter)
+            {
+                presenter.IsMaximizable = false;
+                presenter.IsMinimizable = false;
+                presenter.IsResizable = false;
+                presenter.SetBorderAndTitleBar(false, false);
+            }
+
+            var width = Math.Min(820, GetSystemMetrics(SM_CXSCREEN) - 80);
+            var height = Math.Min(620, GetSystemMetrics(SM_CYSCREEN) - 80);
+            var x = Math.Max(20, (GetSystemMetrics(SM_CXSCREEN) - width) / 2);
+            var y = Math.Max(20, (GetSystemMetrics(SM_CYSCREEN) - height) / 2);
+            appWindow.Resize(new Windows.Graphics.SizeInt32(width, height));
+            appWindow.Move(new Windows.Graphics.PointInt32(x, y));
+
+            var exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
+            exStyle |= WS_EX_TOOLWINDOW | WS_EX_LAYERED;
+            SetWindowLong(hwnd, GWL_EXSTYLE, exStyle);
+            SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW);
+            ShowWindow(hwnd, SW_SHOW);
         }
 
         private static void RegisterShellHotkeys()
@@ -631,6 +819,7 @@ namespace DesktopWallpaper
             {
                 exStyle &= ~WS_EX_TRANSPARENT;
                 exStyle &= ~WS_EX_NOACTIVATE;
+                exStyle &= ~WS_EX_TOOLWINDOW;
             }
 
             SetWindowLong(hwnd, GWL_EXSTYLE, exStyle);
@@ -651,6 +840,7 @@ namespace DesktopWallpaper
 
             ShowWindow(_hwnd, SW_SHOW);
             _presenter?.Maximize();
+            SetWindowPos(_hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
             SetForegroundWindow(_hwnd);
         }
 
@@ -722,7 +912,7 @@ namespace DesktopWallpaper
 
             if (_altKeyDown && vkCode == VK_TAB)
             {
-                AltTabPressed?.Invoke();
+                OpenOrCycleAltTabWindow();
                 return 1;
             }
 
@@ -753,14 +943,14 @@ namespace DesktopWallpaper
             {
                 if (!_screenSnipHandled)
                 {
-                    OpenInteractiveMode();
                     if (_startKeyAltChord)
                     {
+                        OpenInteractiveMode();
                         StartKeyPressed?.Invoke();
                     }
                     else
                     {
-                        StartWindowPressed?.Invoke();
+                        OpenStartMenuWindow();
                     }
                 }
 
@@ -773,7 +963,7 @@ namespace DesktopWallpaper
             if (IsAltKey(vkCode))
             {
                 _altKeyDown = false;
-                AltReleased?.Invoke();
+                CloseAltTabWindow(true);
                 return 1;
             }
 

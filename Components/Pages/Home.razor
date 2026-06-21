@@ -10,7 +10,6 @@
 @inject TaskbarShortcutsService ShortcutsService
 @inject OpenWindowsService OpenWindowsService
 @inject ClipboardHistoryService ClipboardHistoryService
-@inject AppSearchService SearchService
 @inject NavigationManager Navigation
 
 
@@ -162,97 +161,6 @@
         }
     </div>
     <div class="overlay"></div>
-
-    @if (showAltTabMenu)
-    {
-        <div class="alt-tab-scrim">
-            <div class="alt-tab-menu">
-                <div class="alt-tab-header">
-                    <span>Switch windows</span>
-                    <span>@(altTabSelectedIndex + 1) / @altTabWindows.Count</span>
-                </div>
-
-                <div class="alt-tab-grid">
-                    @for (var i = 0; i < altTabWindows.Count; i++)
-                    {
-                        var index = i;
-                        var window = altTabWindows[index];
-
-                        <button class="alt-tab-card @(index == altTabSelectedIndex ? "selected" : "")"
-                                @onclick="() => ActivateAltTabWindow(index)"
-                                title="@window.Title">
-                            <div class="alt-tab-icon">
-                                @if (!string.IsNullOrWhiteSpace(window.IconBase64))
-                                {
-                                    <img src="data:image/png;base64,@window.IconBase64"
-                                         class="alt-tab-icon-image"
-                                         alt="" />
-                                }
-                                else
-                                {
-                                    @GetWindowInitial(window)
-                                }
-                            </div>
-
-                            <div class="alt-tab-text">
-                                <div class="alt-tab-title">@window.Title</div>
-                                <div class="alt-tab-process">@GetWindowLabel(window)</div>
-                            </div>
-
-                            @if (window.IsMinimized)
-                            {
-                                <span class="alt-tab-pill">Min</span>
-                            }
-                        </button>
-                    }
-                </div>
-            </div>
-        </div>
-    }
-
-    @if (showStartWindow)
-    {
-        <div class="start-window">
-            <div class="start-window-header">
-                <span>Start</span>
-                <button class="start-window-close" title="Close" @onclick="CloseStartWindow">x</button>
-            </div>
-
-            <div class="start-window-body">
-                <input type="text"
-                       class="start-search-input"
-                       placeholder="Search for an app..."
-                       @ref="startSearchInput"
-                       @bind="startSearchQuery"
-                       @oninput="OnStartSearchInput"
-                       @onkeydown="OnStartSearchKeyDown" />
-
-                <div class="start-search-results">
-                    @if (startSearchResults != null && startSearchResults.Count > 0)
-                    {
-                        @foreach (var (result, index) in startSearchResults.Select((r, i) => (r, i)))
-                        {
-                            <button class="start-search-result @(startSearchSelectedIndex == index ? "selected" : "")"
-                                    title="@result.Name"
-                                    @onclick="() => SelectStartSearchResult(index)"
-                                    @ondblclick="() => LaunchStartSearchResult(index)"
-                                    @onmousedown:preventDefault="true">
-                                @result.Name
-                            </button>
-                        }
-                    }
-                    else if (!string.IsNullOrWhiteSpace(startSearchQuery))
-                    {
-                        <div class="start-search-empty">No apps found</div>
-                    }
-                    else
-                    {
-                        <div class="start-search-empty">Loading apps...</div>
-                    }
-                </div>
-            </div>
-        </div>
-    }
 
     @if (showClipboardHistory)
     {
@@ -519,20 +427,12 @@
     //shortcut stuff
     private List<TaskbarShortcut> shortcuts = new();
     private List<OpenWindowInfo> openWindows = new();
-    private List<OpenWindowInfo> altTabWindows = new();
     private List<ClipboardHistoryItem> clipboardItems = new();
-    private bool showAltTabMenu;
     private bool showClipboardHistory;
-    private bool showStartWindow;
-    private int altTabSelectedIndex;
     private string shellToast = "";
     private bool showVolumeOverlay;
     private int volumePercent;
     private CancellationTokenSource? volumeOverlayDelay;
-    private string startSearchQuery = "";
-    private List<SearchResult>? startSearchResults;
-    private int startSearchSelectedIndex;
-    private bool shouldFocusStartSearch;
 
     //inbuilt cmd
     Process process = null;
@@ -549,7 +449,6 @@
     //element refereces
     private ElementReference DiscordBox;
     private ElementReference CmdBox;
-    private ElementReference startSearchInput;
     private void togglePrivacy()
     {
         PrivacyMode = !PrivacyMode;
@@ -702,9 +601,6 @@
     }
     protected override async Task OnInitializedAsync()
     {
-        MauiProgram.AltTabPressed += OnAltTabPressed;
-        MauiProgram.AltReleased += OnAltReleased;
-        MauiProgram.StartWindowPressed += OnStartWindowPressed;
         MauiProgram.ClipboardHistoryPressed += OnClipboardHistoryPressed;
         MauiProgram.ScreenshotCaptured += OnScreenshotCaptured;
         MauiProgram.VolumeChanged += OnVolumeChanged;
@@ -731,148 +627,6 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (shouldFocusStartSearch)
-        {
-            shouldFocusStartSearch = false;
-            await startSearchInput.FocusAsync();
-        }
-    }
-
-    private void OnAltTabPressed()
-    {
-        _ = InvokeAsync(() =>
-        {
-            altTabWindows = OpenWindowsService.GetOpenWindows();
-
-            if (altTabWindows.Count == 0)
-            {
-                showAltTabMenu = false;
-                return;
-            }
-
-            altTabSelectedIndex = showAltTabMenu
-                ? (altTabSelectedIndex + 1) % altTabWindows.Count
-                : Math.Min(1, altTabWindows.Count - 1);
-
-            showAltTabMenu = true;
-            MauiProgram.OpenInteractiveMode();
-            StateHasChanged();
-        });
-    }
-
-    private void OnAltReleased()
-    {
-        _ = InvokeAsync(() =>
-        {
-            if (!showAltTabMenu || altTabWindows.Count == 0)
-            {
-                showAltTabMenu = false;
-                StateHasChanged();
-                return;
-            }
-
-            var selectedWindow = altTabWindows[Math.Clamp(altTabSelectedIndex, 0, altTabWindows.Count - 1)];
-            showAltTabMenu = false;
-            OpenWindowsService.ActivateWindow(selectedWindow);
-            openWindows = OpenWindowsService.GetOpenWindows();
-            MauiProgram.DisableInteractiveMode();
-            StateHasChanged();
-        });
-    }
-
-    private async void OnStartWindowPressed()
-    {
-        await InvokeAsync(async () =>
-        {
-            if (showStartWindow)
-            {
-                CloseStartWindow();
-                return;
-            }
-
-            await OpenStartWindow();
-        });
-    }
-
-    private async Task OpenStartWindow()
-    {
-        startSearchQuery = "";
-        startSearchSelectedIndex = 0;
-        startSearchResults = await SearchService.GetAllAppsAsync();
-        showStartWindow = true;
-        shouldFocusStartSearch = true;
-            showClipboardHistory = false;
-            showAltTabMenu = false;
-            MauiProgram.OpenInteractiveMode();
-            StateHasChanged();
-    }
-
-    private void CloseStartWindow()
-    {
-        showStartWindow = false;
-        startSearchQuery = "";
-        startSearchSelectedIndex = 0;
-        MauiProgram.DisableInteractiveMode();
-    }
-
-    private async Task OnStartSearchInput(ChangeEventArgs e)
-    {
-        startSearchQuery = e.Value?.ToString() ?? "";
-        startSearchSelectedIndex = 0;
-        startSearchResults = await SearchService.SearchAsync(startSearchQuery);
-    }
-
-    private void OnStartSearchKeyDown(KeyboardEventArgs e)
-    {
-        switch (e.Key)
-        {
-            case "Escape":
-                CloseStartWindow();
-                return;
-            case "Enter":
-            case "NumpadEnter":
-                LaunchSelectedStartSearchResult();
-                return;
-        }
-
-        if (startSearchResults is null || startSearchResults.Count == 0)
-        {
-            return;
-        }
-
-        switch (e.Key)
-        {
-            case "ArrowDown":
-                startSearchSelectedIndex = (startSearchSelectedIndex + 1) % startSearchResults.Count;
-                break;
-            case "ArrowUp":
-                startSearchSelectedIndex = (startSearchSelectedIndex - 1 + startSearchResults.Count) % startSearchResults.Count;
-                break;
-        }
-    }
-
-    private void LaunchSelectedStartSearchResult()
-    {
-        if (startSearchResults != null && startSearchSelectedIndex >= 0 && startSearchSelectedIndex < startSearchResults.Count)
-        {
-            LaunchStartSearchResult(startSearchSelectedIndex);
-        }
-    }
-
-    private void SelectStartSearchResult(int index)
-    {
-        startSearchSelectedIndex = index;
-    }
-
-    private void LaunchStartSearchResult(int index)
-    {
-        if (startSearchResults is null || index < 0 || index >= startSearchResults.Count)
-        {
-            return;
-        }
-
-        SearchService.LaunchApp(startSearchResults[index]);
-        showStartWindow = false;
     }
 
     private void OnClipboardHistoryPressed()
@@ -1031,7 +785,6 @@
         }
         finally
         {
-            showStartWindow = false;
             MauiProgram.DisableInteractiveMode();
         }
     }
@@ -1039,23 +792,11 @@
     async Task Open(TaskbarShortcut item)
     {
         await ShortcutsService.LaunchAsync(item);
-        showStartWindow = false;
     }
 
     private void ActivateWindow(OpenWindowInfo window)
     {
         OpenWindowsService.ToggleWindow(window);
-        openWindows = OpenWindowsService.GetOpenWindows();
-        MauiProgram.DisableInteractiveMode();
-    }
-
-    private void ActivateAltTabWindow(int index)
-    {
-        if (index < 0 || index >= altTabWindows.Count)
-            return;
-
-        showAltTabMenu = false;
-        OpenWindowsService.ActivateWindow(altTabWindows[index]);
         openWindows = OpenWindowsService.GetOpenWindows();
         MauiProgram.DisableInteractiveMode();
     }
@@ -1104,9 +845,6 @@
 
     public void Dispose()
     {
-        MauiProgram.AltTabPressed -= OnAltTabPressed;
-        MauiProgram.AltReleased -= OnAltReleased;
-        MauiProgram.StartWindowPressed -= OnStartWindowPressed;
         MauiProgram.ClipboardHistoryPressed -= OnClipboardHistoryPressed;
         MauiProgram.ScreenshotCaptured -= OnScreenshotCaptured;
         MauiProgram.VolumeChanged -= OnVolumeChanged;
