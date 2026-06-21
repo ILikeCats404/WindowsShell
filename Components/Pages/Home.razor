@@ -225,8 +225,8 @@
         </div>
 
         <button class="bottom-bar-clock"
-                title="Toggle clickable"
-                @onclick="ToggleClickable">
+                title="Focus desktop"
+                @onclick="FocusDesktop">
             <span>@CurrentTime.ToString("hh:mm:ss tt")</span>
             <span>@CurrentTime.ToString("HH:mm")</span>
             <span>@CurrentTime.ToString("MMMM/MM/dd/yy")</span>
@@ -801,9 +801,9 @@
         MauiProgram.DisableInteractiveMode();
     }
 
-    private void ToggleClickable()
+    private void FocusDesktop()
     {
-        MauiProgram.ToggleClickableMode();
+        MauiProgram.FocusInteractiveMode();
     }
 
     private void RestoreClipboardItem(ClipboardHistoryItem item)

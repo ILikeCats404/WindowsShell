@@ -443,6 +443,26 @@ namespace DesktopWallpaper
 #endif
         }
 
+        public static void FocusInteractiveMode()
+        {
+#if WINDOWS
+            if (_hwnd == IntPtr.Zero)
+            {
+                return;
+            }
+
+            _clickThrough = false;
+            DevStuff.IsClickThrough = false;
+            ApplyClickThrough(_hwnd, false);
+
+            ShowWindow(_hwnd, SW_SHOW);
+            _presenter?.Maximize();
+            SetWindowPos(_hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+            SetForegroundWindow(_hwnd);
+            SetWindowPos(_hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+#endif
+        }
+
         public static Process? StartWithFreshEnvironment(string fileName, string? arguments = null, string? workingDirectory = null)
         {
 #if WINDOWS
