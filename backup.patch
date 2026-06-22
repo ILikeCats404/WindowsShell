@@ -1,0 +1,644 @@
+diff --git a/Components/Pages/Start.razor b/Components/Pages/Start.razor
+index 7c2926f..4957294 100644
+--- a/Components/Pages/Start.razor
++++ b/Components/Pages/Start.razor
+@@ -194,7 +194,9 @@
+ 
+     protected override async Task OnInitializedAsync()
+     {
+-        startSearchResults = await SearchService.GetAllAppsAsync();
++        startSearchResults = StartMenuCache.IsReady
++            ? StartMenuCache.GetAllAppsSnapshot()
++            : await SearchService.GetAllAppsAsync();
+     }
+ 
+     protected override async Task OnAfterRenderAsync(bool firstRender)
+@@ -215,7 +217,9 @@
+     {
+         startSearchQuery = e.Value?.ToString() ?? "";
+         startSearchSelectedIndex = 0;
+-        startSearchResults = await SearchService.SearchAsync(startSearchQuery);
++        startSearchResults = StartMenuCache.IsReady
++            ? StartMenuCache.SearchSnapshot(startSearchQuery)
++            : await SearchService.SearchAsync(startSearchQuery);
+     }
+ 
+     private void OnStartSearchKeyDown(KeyboardEventArgs e)
+diff --git a/Components/TaskbarBar.razor b/Components/TaskbarBar.razor
+index ce4b900..bf5ca1c 100644
+--- a/Components/TaskbarBar.razor
++++ b/Components/TaskbarBar.razor
+@@ -54,13 +54,19 @@
+ <style>
+     .open-apps-bar {
+         position: fixed;
+-        bottom: 0;
+-        left: 0;
+-        right: 0;
+-        height: 54px;
+-        padding: 7px 12px;
+-        background: rgba(12, 12, 12, 0.84);
+-        border-top: 1px solid rgba(255,255,255,0.08);
++        bottom: 5px;
++        left: 10px;
++        right: 10px;
++        height: 48px;
++        box-sizing: border-box;
++        padding: 5px 10px;
++        background: rgba(10, 10, 12, 0.88);
++        border: 1px solid rgba(42,42,46,0.96);
++        border-bottom-color: rgba(24,24,28,0.98);
++        border-radius: 8px;
++        box-shadow:
++            0 14px 34px rgba(0,0,0,0.42),
++            0 0 0 2px rgba(16,16,20,1);
+         backdrop-filter: blur(16px);
+         overflow: hidden;
+         overflow-y: hidden;
+@@ -70,10 +76,10 @@
+ 
+     .bottom-bar-shortcuts {
+         position: absolute;
+-        left: 12px;
++        left: 10px;
+         right: calc(50% + 205px);
+-        top: 7px;
+-        height: 40px;
++        top: 5px;
++        height: 38px;
+         display: flex;
+         align-items: center;
+         gap: 8px;
+@@ -115,9 +121,9 @@
+     .bottom-bar-windows {
+         position: absolute;
+         left: calc(50% + 205px);
+-        right: 12px;
+-        top: 7px;
+-        height: 40px;
++        right: 10px;
++        top: 5px;
++        height: 38px;
+         display: flex;
+         align-items: center;
+         gap: 8px;
+@@ -196,6 +202,7 @@
+         flex: 0 0 44px;
+         padding: 0;
+         border: none;
++        outline: none;
+         border-radius: 6px;
+         background: transparent;
+         color: white;
+diff --git a/MauiProgram.cs b/MauiProgram.cs
+index 28614e0..92d866f 100644
+--- a/MauiProgram.cs
++++ b/MauiProgram.cs
+@@ -35,9 +35,13 @@ namespace DesktopWallpaper
+          */
+         
+         // Win32 window/style constants
++        private const int GWL_STYLE = -16;
+         private const int GWL_EXSTYLE = -20;
+         private const int GWLP_WNDPROC = -4;
+ 
++        private const int WS_CAPTION = 0x00C00000;
++        private const int WS_THICKFRAME = 0x00040000;
++        private const int WS_BORDER = 0x00800000;
+         private const int WS_EX_TRANSPARENT = 0x00000020;
+         private const int WS_EX_LAYERED = 0x00080000;
+         private const int WS_EX_NOACTIVATE = 0x08000000;
+@@ -88,7 +92,7 @@ namespace DesktopWallpaper
+         private const int VK_MEDIA_STOP = 0xB2;
+         private const int VK_MEDIA_PLAY_PAUSE = 0xB3;
+ 
+-        // Optional appbar/taskbar reservation constants. Currently unused, but kept handy.
++        // Appbar/taskbar reservation constants.
+         private const uint ABM_NEW = 0x00000000;
+         private const uint ABM_QUERYPOS = 0x00000002;
+         private const uint ABM_SETPOS = 0x00000003;
+@@ -109,6 +113,7 @@ namespace DesktopWallpaper
+ 
+         private static readonly IntPtr HWND_TOPMOST = new(-1);
+         private static readonly IntPtr HWND_NOTOPMOST = new(-2);
++        private static readonly IntPtr HWND_TOP = new(0);
+ 
+         private static IntPtr _hwnd;
+         private static IntPtr _startMenuHwnd;
+@@ -128,12 +133,12 @@ namespace DesktopWallpaper
+         private static readonly LowLevelKeyboardProc _keyboardProc = KeyboardHookHandler;
+ 
+         private static bool _clickThrough = true;
+-        private static bool _taskbarReserved;
+         private static bool _winKeyDown;
+         private static bool _shiftKeyDown;
+         private static bool _altKeyDown;
+         private static bool _startKeyAltChord;
+         private static bool _screenSnipHandled;
++        private static readonly HashSet<IntPtr> _reservedTaskbarHwnds = new();
+ 
+         public static event Action? StartKeyPressed;
+         public static event Action? ClipboardHistoryPressed;
+@@ -142,6 +147,7 @@ namespace DesktopWallpaper
+ 
+         private delegate IntPtr WndProc(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+         private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
++        private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+ 
+         [DllImport("user32.dll")]
+         private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
+@@ -149,6 +155,18 @@ namespace DesktopWallpaper
+         [DllImport("user32.dll")]
+         private static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
+ 
++        [DllImport("user32.dll")]
++        private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
++
++        [DllImport("user32.dll")]
++        private static extern bool IsWindowVisible(IntPtr hWnd);
++
++        [DllImport("user32.dll")]
++        private static extern bool IsIconic(IntPtr hWnd);
++
++        [DllImport("user32.dll")]
++        private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
++
+         [DllImport("user32.dll")]
+         private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+ 
+@@ -778,7 +796,55 @@ namespace DesktopWallpaper
+             InstallKeyboardHook();
+             InstallWindowProcHook();
+ 
++            ReserveBottomTaskbarSpace(_hwnd, GetPrimaryMonitorRect(), false);
+             OpenSecondaryTaskbarWindows();
++            BringVisibleAppWindowsInFrontOfShell();
++        }
++
++        private static void BringVisibleAppWindowsInFrontOfShell()
++        {
++            var currentProcessId = (uint)Environment.ProcessId;
++            var windows = new List<IntPtr>();
++
++            EnumWindows((hwnd, _) =>
++            {
++                if (hwnd == IntPtr.Zero
++                    || hwnd == _hwnd
++                    || hwnd == _startMenuHwnd
++                    || _secondaryTaskbarHwnds.Contains(hwnd)
++                    || !IsWindowVisible(hwnd)
++                    || IsIconic(hwnd))
++                {
++                    return true;
++                }
++
++                GetWindowThreadProcessId(hwnd, out var processId);
++                if (processId == currentProcessId)
++                {
++                    return true;
++                }
++
++                var exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
++                if ((exStyle & WS_EX_TOOLWINDOW) != 0)
++                {
++                    return true;
++                }
++
++                windows.Add(hwnd);
++                return true;
++            }, IntPtr.Zero);
++
++            for (var i = windows.Count - 1; i >= 0; i--)
++            {
++                SetWindowPos(
++                    windows[i],
++                    HWND_TOP,
++                    0,
++                    0,
++                    0,
++                    0,
++                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
++            }
+         }
+ 
+         private static readonly Dictionary<string, RECT> _pendingTaskbarRects = new();
+@@ -801,6 +867,31 @@ namespace DesktopWallpaper
+             return rects;
+         }
+ 
++        private static RECT GetPrimaryMonitorRect()
++        {
++            var primaryRect = new RECT
++            {
++                left = 0,
++                top = 0,
++                right = GetSystemMetrics(SM_CXSCREEN),
++                bottom = GetSystemMetrics(SM_CYSCREEN),
++            };
++
++            EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (IntPtr hMonitor, IntPtr hdc, ref RECT rect, IntPtr data) =>
++            {
++                var info = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
++                if (GetMonitorInfo(hMonitor, ref info) && (info.dwFlags & MONITORINFOF_PRIMARY) != 0)
++                {
++                    primaryRect = info.rcMonitor;
++                    return false;
++                }
++
++                return true;
++            }, IntPtr.Zero);
++
++            return primaryRect;
++        }
++
+         // Opens one extra borderless window per non-primary monitor, each hosting
+         // its own copy of the taskbar pinned to that monitor's bottom edge -- a
+         // duplicate of the main taskbar rather than stretching the original across
+@@ -875,6 +966,13 @@ namespace DesktopWallpaper
+             exStyle |= WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
+             SetWindowLong(hwnd, GWL_EXSTYLE, exStyle);
+ 
++            var style = GetWindowLong(hwnd, GWL_STYLE);
++            style &= ~WS_CAPTION;
++            style &= ~WS_THICKFRAME;
++            style &= ~WS_BORDER;
++            SetWindowLong(hwnd, GWL_STYLE, style);
++
++            ReserveBottomTaskbarSpace(hwnd, monitorRect, true);
+             SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, TASKBAR_HEIGHT, SWP_SHOWWINDOW | SWP_NOACTIVATE);
+             ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+         }
+@@ -1318,46 +1416,50 @@ namespace DesktopWallpaper
+             }
+         }
+ 
+-        private static void ReserveBottomTaskbarSpace(IntPtr hwnd, int height)
++        private static void ReserveBottomTaskbarSpace(IntPtr hwnd, RECT monitorRect, bool moveTaskbarWindow)
+         {
+-            if (_taskbarReserved)
++            if (hwnd == IntPtr.Zero || _reservedTaskbarHwnds.Contains(hwnd))
+             {
+                 return;
+             }
+ 
+-            var screenWidth = GetSystemMetrics(SM_CXSCREEN);
+-            var screenHeight = GetSystemMetrics(SM_CYSCREEN);
++            var taskbarRect = new RECT
++            {
++                left = monitorRect.left,
++                right = monitorRect.right,
++                top = monitorRect.bottom - TASKBAR_HEIGHT,
++                bottom = monitorRect.bottom,
++            };
+ 
+             APPBARDATA data = new()
+             {
+                 cbSize = Marshal.SizeOf<APPBARDATA>(),
+                 hWnd = hwnd,
+                 uEdge = ABE_BOTTOM,
+-                rc = new RECT
+-                {
+-                    left = 0,
+-                    right = screenWidth,
+-                    top = screenHeight - height,
+-                    bottom = screenHeight,
+-                },
++                rc = taskbarRect,
+             };
+ 
+             SHAppBarMessage(ABM_NEW, ref data);
+             SHAppBarMessage(ABM_QUERYPOS, ref data);
+ 
+-            data.rc.top = data.rc.bottom - height;
++            data.rc.left = taskbarRect.left;
++            data.rc.right = taskbarRect.right;
++            data.rc.top = data.rc.bottom - TASKBAR_HEIGHT;
+             SHAppBarMessage(ABM_SETPOS, ref data);
+ 
+-            SetWindowPos(
+-                hwnd,
+-                IntPtr.Zero,
+-                data.rc.left,
+-                data.rc.top,
+-                data.rc.right - data.rc.left,
+-                data.rc.bottom - data.rc.top,
+-                SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
++            if (moveTaskbarWindow)
++            {
++                SetWindowPos(
++                    hwnd,
++                    IntPtr.Zero,
++                    data.rc.left,
++                    data.rc.top,
++                    data.rc.right - data.rc.left,
++                    data.rc.bottom - data.rc.top,
++                    SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
++            }
+ 
+-            _taskbarReserved = true;
++            _reservedTaskbarHwnds.Add(hwnd);
+         }
+ #endif
+     }
+diff --git a/Services/AppSearchService.cs b/Services/AppSearchService.cs
+index aade7e1..108f445 100644
+--- a/Services/AppSearchService.cs
++++ b/Services/AppSearchService.cs
+@@ -1,7 +1,5 @@
+ using System.Diagnostics;
+ using System.Runtime.InteropServices;
+-using System.Text.Json;
+-using Microsoft.Win32;
+ 
+ namespace DesktopWallpaper.Services
+ {
+@@ -28,215 +26,19 @@ namespace DesktopWallpaper.Services
+             string? lpDirectory,
+             int nShowCmd);
+ 
+-        private static readonly SemaphoreSlim CacheLock = new(1, 1);
+-        private static List<SearchResult> AppCache = new();
+-        private static Task? InitializeCacheTask;
+-        private static bool CacheInitialized;
+-
+         public void WarmCache()
+         {
+-            _ = EnsureCacheAsync();
++            StartMenuCache.Warm();
+         }
+ 
+         public async Task<List<SearchResult>> SearchAsync(string query)
+         {
+-            await EnsureCacheAsync();
+-
+-            if (string.IsNullOrWhiteSpace(query))
+-                return AppCache;
+-
+-            var lowerQuery = query.ToLower();
+-            return AppCache
+-                .Where(a => a.Name.ToLower().Contains(lowerQuery))
+-                .OrderBy(a => a.Name)
+-                .ToList();
++            return await StartMenuCache.SearchAsync(query);
+         }
+ 
+         public async Task<List<SearchResult>> GetAllAppsAsync()
+         {
+-            await EnsureCacheAsync();
+-            return AppCache;
+-        }
+-
+-        private static async Task EnsureCacheAsync()
+-        {
+-            if (CacheInitialized)
+-            {
+-                return;
+-            }
+-
+-            await CacheLock.WaitAsync();
+-            try
+-            {
+-                InitializeCacheTask ??= InitializeCacheAsync();
+-            }
+-            finally
+-            {
+-                CacheLock.Release();
+-            }
+-
+-            await InitializeCacheTask;
+-        }
+-
+-        private static async Task InitializeCacheAsync()
+-        {
+-            var appCache = new List<SearchResult>();
+-
+-            await Task.Run(() =>
+-            {
+-                // Search in Start Menu
+-                SearchStartMenu(appCache);
+-
+-                // Search in Registry (App Paths)
+-                SearchRegistry(appCache);
+-
+-                // Search Microsoft Store / packaged apps
+-                SearchStoreApps(appCache);
+-
+-                // Remove duplicates
+-                AppCache = appCache
+-                    .GroupBy(a => a.Name.ToLower())
+-                    .Select(g => g.First())
+-                    .OrderBy(a => a.Name)
+-                    .ToList();
+-            });
+-
+-            CacheInitialized = true;
+-        }
+-
+-        private static void SearchStartMenu(List<SearchResult> appCache)
+-        {
+-            var folders = new[]
+-            {
+-                Path.Combine(
+-                    Environment.GetFolderPath(Environment.SpecialFolder.StartMenu),
+-                    "Programs"),
+-                Path.Combine(
+-                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+-                    @"Microsoft\Windows\Start Menu\Programs"),
+-                Path.Combine(
+-                    Environment.GetFolderPath(Environment.SpecialFolder.CommonStartMenu),
+-                    "Programs")
+-            };
+-
+-            foreach (var folder in folders.Distinct(StringComparer.OrdinalIgnoreCase))
+-            {
+-                SearchStartMenuFolder(folder, appCache);
+-            }
+-        }
+-
+-        private static void SearchStartMenuFolder(string folder, List<SearchResult> appCache)
+-        {
+-            try
+-            {
+-                if (!Directory.Exists(folder))
+-                    return;
+-
+-                var files = Directory
+-                    .EnumerateFiles(folder, "*.*", SearchOption.AllDirectories)
+-                    .Where(file =>
+-                        file.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase) ||
+-                        file.EndsWith(".appref-ms", StringComparison.OrdinalIgnoreCase) ||
+-                        file.EndsWith(".url", StringComparison.OrdinalIgnoreCase));
+-
+-                foreach (var file in files)
+-                {
+-                    string name = Path.GetFileNameWithoutExtension(file);
+-                    appCache.Add(new SearchResult
+-                    {
+-                        Name = name,
+-                        Path = file,
+-                        IconPath = file
+-                    });
+-                }
+-            }
+-            catch
+-            {
+-            }
+-        }
+-
+-        private static void SearchRegistry(List<SearchResult> appCache)
+-        {
+-            try
+-            {
+-                using var key = Registry.LocalMachine.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\App Paths");
+-                if (key == null)
+-                    return;
+-
+-                foreach (var subKeyName in key.GetSubKeyNames())
+-                {
+-                    try
+-                    {
+-                        using var subKey = key.OpenSubKey(subKeyName);
+-                        var defaultValue = subKey?.GetValue("") as string;
+-
+-                        if (!string.IsNullOrWhiteSpace(defaultValue) && File.Exists(defaultValue))
+-                        {
+-                            string appName = subKeyName.Replace(".exe", "", StringComparison.OrdinalIgnoreCase);
+-
+-                            // Skip if already have this app
+-                            if (appCache.Any(a => a.Name.Equals(appName, StringComparison.OrdinalIgnoreCase)))
+-                                continue;
+-
+-                            appCache.Add(new SearchResult
+-                            {
+-                                Name = appName,
+-                                Path = defaultValue,
+-                                IconPath = defaultValue
+-                            });
+-                        }
+-                    }
+-                    catch { }
+-                }
+-            }
+-            catch { }
+-        }
+-
+-        private static void SearchStoreApps(List<SearchResult> appCache)
+-        {
+-            try
+-            {
+-                var psi = new ProcessStartInfo
+-                {
+-                    FileName = "powershell.exe",
+-                    Arguments = "-NoProfile -ExecutionPolicy Bypass -Command \"Get-StartApps | Select-Object Name,AppID | ConvertTo-Json -Compress\"",
+-                    RedirectStandardOutput = true,
+-                    RedirectStandardError = true,
+-                    UseShellExecute = false,
+-                    CreateNoWindow = true
+-                };
+-
+-                using var process = Process.Start(psi);
+-                if (process == null)
+-                    return;
+-
+-                string output = process.StandardOutput.ReadToEnd();
+-                process.WaitForExit(5000);
+-
+-                if (string.IsNullOrWhiteSpace(output))
+-                    return;
+-
+-                var apps = JsonSerializer.Deserialize<List<StartApp>>(output);
+-                if (apps == null)
+-                    return;
+-
+-                foreach (var app in apps)
+-                {
+-                    if (string.IsNullOrWhiteSpace(app.Name) || string.IsNullOrWhiteSpace(app.AppID))
+-                        continue;
+-
+-                    appCache.Add(new SearchResult
+-                    {
+-                        Name = app.Name,
+-                        Path = app.AppID,
+-                        IconPath = app.AppID,
+-                        IsStoreApp = true
+-                    });
+-                }
+-            }
+-            catch
+-            {
+-            }
++            return await StartMenuCache.GetAllAppsAsync();
+         }
+ 
+         public void LaunchApp(SearchResult app)
+@@ -309,10 +111,5 @@ namespace DesktopWallpaper.Services
+             }
+         }
+ 
+-        private sealed class StartApp
+-        {
+-            public string Name { get; set; } = "";
+-            public string AppID { get; set; } = "";
+-        }
+     }
+ }
+diff --git a/TaskbarPage.xaml b/TaskbarPage.xaml
+index e4bfd3c..514c51f 100644
+--- a/TaskbarPage.xaml
++++ b/TaskbarPage.xaml
+@@ -3,9 +3,12 @@
+              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+              xmlns:components="clr-namespace:DesktopWallpaper.Components"
+              x:Class="DesktopWallpaper.TaskbarPage"
+-             BackgroundColor="Transparent">
++             BackgroundColor="#101014">
+ 
+-    <BlazorWebView x:Name="blazorWebView" HostPage="wwwroot/index.html" StartPath="/taskbar-window">
++    <BlazorWebView x:Name="blazorWebView"
++                   HostPage="wwwroot/index.html"
++                   StartPath="/taskbar-window"
++                   BackgroundColor="#101014">
+         <BlazorWebView.RootComponents>
+             <RootComponent Selector="#app" ComponentType="{x:Type components:Routes}" />
+         </BlazorWebView.RootComponents>
+diff --git a/wwwroot/app.css b/wwwroot/app.css
+index 66f452d..b22e796 100644
+--- a/wwwroot/app.css
++++ b/wwwroot/app.css
+@@ -1,5 +1,36 @@
++:root {
++    background: #101014 !important;
++}
++
++*,
++*::before,
++*::after {
++    box-sizing: border-box;
++}
++
++*:focus,
++*:focus-visible {
++    outline: none !important;
++    box-shadow: none !important;
++}
++
+ html, body {
+     font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
++    margin: 0;
++    padding: 0;
++    width: 100%;
++    height: 100%;
++    background: #101014 !important;
++    overflow: hidden;
++}
++
++#app {
++    width: 100%;
++    height: 100%;
++    min-height: 100%;
++    margin: 0;
++    padding: 0;
++    background: #101014 !important;
+ }
+ 
+ a, .btn-link {

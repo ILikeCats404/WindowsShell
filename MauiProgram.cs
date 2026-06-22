@@ -35,9 +35,13 @@ namespace DesktopWallpaper
          */
         
         // Win32 window/style constants
+        private const int GWL_STYLE = -16;
         private const int GWL_EXSTYLE = -20;
         private const int GWLP_WNDPROC = -4;
 
+        private const int WS_CAPTION = 0x00C00000;
+        private const int WS_THICKFRAME = 0x00040000;
+        private const int WS_BORDER = 0x00800000;
         private const int WS_EX_TRANSPARENT = 0x00000020;
         private const int WS_EX_LAYERED = 0x00080000;
         private const int WS_EX_NOACTIVATE = 0x08000000;
@@ -88,7 +92,7 @@ namespace DesktopWallpaper
         private const int VK_MEDIA_STOP = 0xB2;
         private const int VK_MEDIA_PLAY_PAUSE = 0xB3;
 
-        // Optional appbar/taskbar reservation constants. Currently unused, but kept handy.
+        // Appbar/taskbar reservation constants.
         private const uint ABM_NEW = 0x00000000;
         private const uint ABM_QUERYPOS = 0x00000002;
         private const uint ABM_SETPOS = 0x00000003;
@@ -109,6 +113,7 @@ namespace DesktopWallpaper
 
         private static readonly IntPtr HWND_TOPMOST = new(-1);
         private static readonly IntPtr HWND_NOTOPMOST = new(-2);
+        private static readonly IntPtr HWND_TOP = new(0);
 
         private static IntPtr _hwnd;
         private static IntPtr _startMenuHwnd;
@@ -128,12 +133,12 @@ namespace DesktopWallpaper
         private static readonly LowLevelKeyboardProc _keyboardProc = KeyboardHookHandler;
 
         private static bool _clickThrough = true;
-        private static bool _taskbarReserved;
         private static bool _winKeyDown;
         private static bool _shiftKeyDown;
         private static bool _altKeyDown;
         private static bool _startKeyAltChord;
         private static bool _screenSnipHandled;
+        private static readonly HashSet<IntPtr> _reservedTaskbarHwnds = new();
 
         public static event Action? StartKeyPressed;
         public static event Action? ClipboardHistoryPressed;
@@ -142,12 +147,25 @@ namespace DesktopWallpaper
 
         private delegate IntPtr WndProc(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
         private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
+        private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 
         [DllImport("user32.dll")]
         private static extern int GetWindowLong(IntPtr hWnd, int nIndex);
 
         [DllImport("user32.dll")]
         private static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
+
+        [DllImport("user32.dll")]
+        private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        private static extern bool IsWindowVisible(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern bool IsIconic(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
 
         [DllImport("user32.dll")]
         private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
@@ -778,7 +796,55 @@ namespace DesktopWallpaper
             InstallKeyboardHook();
             InstallWindowProcHook();
 
+            ReserveBottomTaskbarSpace(_hwnd, GetPrimaryMonitorRect(), false);
             OpenSecondaryTaskbarWindows();
+            BringVisibleAppWindowsInFrontOfShell();
+        }
+
+        private static void BringVisibleAppWindowsInFrontOfShell()
+        {
+            var currentProcessId = (uint)Environment.ProcessId;
+            var windows = new List<IntPtr>();
+
+            EnumWindows((hwnd, _) =>
+            {
+                if (hwnd == IntPtr.Zero
+                    || hwnd == _hwnd
+                    || hwnd == _startMenuHwnd
+                    || _secondaryTaskbarHwnds.Contains(hwnd)
+                    || !IsWindowVisible(hwnd)
+                    || IsIconic(hwnd))
+                {
+                    return true;
+                }
+
+                GetWindowThreadProcessId(hwnd, out var processId);
+                if (processId == currentProcessId)
+                {
+                    return true;
+                }
+
+                var exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
+                if ((exStyle & WS_EX_TOOLWINDOW) != 0)
+                {
+                    return true;
+                }
+
+                windows.Add(hwnd);
+                return true;
+            }, IntPtr.Zero);
+
+            for (var i = windows.Count - 1; i >= 0; i--)
+            {
+                SetWindowPos(
+                    windows[i],
+                    HWND_TOP,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            }
         }
 
         private static readonly Dictionary<string, RECT> _pendingTaskbarRects = new();
@@ -799,6 +865,31 @@ namespace DesktopWallpaper
             }, IntPtr.Zero);
 
             return rects;
+        }
+
+        private static RECT GetPrimaryMonitorRect()
+        {
+            var primaryRect = new RECT
+            {
+                left = 0,
+                top = 0,
+                right = GetSystemMetrics(SM_CXSCREEN),
+                bottom = GetSystemMetrics(SM_CYSCREEN),
+            };
+
+            EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (IntPtr hMonitor, IntPtr hdc, ref RECT rect, IntPtr data) =>
+            {
+                var info = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+                if (GetMonitorInfo(hMonitor, ref info) && (info.dwFlags & MONITORINFOF_PRIMARY) != 0)
+                {
+                    primaryRect = info.rcMonitor;
+                    return false;
+                }
+
+                return true;
+            }, IntPtr.Zero);
+
+            return primaryRect;
         }
 
         // Opens one extra borderless window per non-primary monitor, each hosting
@@ -875,6 +966,13 @@ namespace DesktopWallpaper
             exStyle |= WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
             SetWindowLong(hwnd, GWL_EXSTYLE, exStyle);
 
+            var style = GetWindowLong(hwnd, GWL_STYLE);
+            style &= ~WS_CAPTION;
+            style &= ~WS_THICKFRAME;
+            style &= ~WS_BORDER;
+            SetWindowLong(hwnd, GWL_STYLE, style);
+
+            ReserveBottomTaskbarSpace(hwnd, monitorRect, true);
             SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, TASKBAR_HEIGHT, SWP_SHOWWINDOW | SWP_NOACTIVATE);
             ShowWindow(hwnd, SW_SHOWNOACTIVATE);
         }
@@ -1318,46 +1416,50 @@ namespace DesktopWallpaper
             }
         }
 
-        private static void ReserveBottomTaskbarSpace(IntPtr hwnd, int height)
+        private static void ReserveBottomTaskbarSpace(IntPtr hwnd, RECT monitorRect, bool moveTaskbarWindow)
         {
-            if (_taskbarReserved)
+            if (hwnd == IntPtr.Zero || _reservedTaskbarHwnds.Contains(hwnd))
             {
                 return;
             }
 
-            var screenWidth = GetSystemMetrics(SM_CXSCREEN);
-            var screenHeight = GetSystemMetrics(SM_CYSCREEN);
+            var taskbarRect = new RECT
+            {
+                left = monitorRect.left,
+                right = monitorRect.right,
+                top = monitorRect.bottom - TASKBAR_HEIGHT,
+                bottom = monitorRect.bottom,
+            };
 
             APPBARDATA data = new()
             {
                 cbSize = Marshal.SizeOf<APPBARDATA>(),
                 hWnd = hwnd,
                 uEdge = ABE_BOTTOM,
-                rc = new RECT
-                {
-                    left = 0,
-                    right = screenWidth,
-                    top = screenHeight - height,
-                    bottom = screenHeight,
-                },
+                rc = taskbarRect,
             };
 
             SHAppBarMessage(ABM_NEW, ref data);
             SHAppBarMessage(ABM_QUERYPOS, ref data);
 
-            data.rc.top = data.rc.bottom - height;
+            data.rc.left = taskbarRect.left;
+            data.rc.right = taskbarRect.right;
+            data.rc.top = data.rc.bottom - TASKBAR_HEIGHT;
             SHAppBarMessage(ABM_SETPOS, ref data);
 
-            SetWindowPos(
-                hwnd,
-                IntPtr.Zero,
-                data.rc.left,
-                data.rc.top,
-                data.rc.right - data.rc.left,
-                data.rc.bottom - data.rc.top,
-                SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            if (moveTaskbarWindow)
+            {
+                SetWindowPos(
+                    hwnd,
+                    IntPtr.Zero,
+                    data.rc.left,
+                    data.rc.top,
+                    data.rc.right - data.rc.left,
+                    data.rc.bottom - data.rc.top,
+                    SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            }
 
-            _taskbarReserved = true;
+            _reservedTaskbarHwnds.Add(hwnd);
         }
 #endif
     }

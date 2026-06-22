@@ -194,7 +194,9 @@
 
     protected override async Task OnInitializedAsync()
     {
-        startSearchResults = await SearchService.GetAllAppsAsync();
+        startSearchResults = StartMenuCache.IsReady
+            ? StartMenuCache.GetAllAppsSnapshot()
+            : await SearchService.GetAllAppsAsync();
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -215,7 +217,9 @@
     {
         startSearchQuery = e.Value?.ToString() ?? "";
         startSearchSelectedIndex = 0;
-        startSearchResults = await SearchService.SearchAsync(startSearchQuery);
+        startSearchResults = StartMenuCache.IsReady
+            ? StartMenuCache.SearchSnapshot(startSearchQuery)
+            : await SearchService.SearchAsync(startSearchQuery);
     }
 
     private void OnStartSearchKeyDown(KeyboardEventArgs e)

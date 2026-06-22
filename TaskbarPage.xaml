@@ -3,9 +3,12 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
              xmlns:components="clr-namespace:DesktopWallpaper.Components"
              x:Class="DesktopWallpaper.TaskbarPage"
-             BackgroundColor="Transparent">
+             BackgroundColor="#101014">
 
-    <BlazorWebView x:Name="blazorWebView" HostPage="wwwroot/index.html" StartPath="/taskbar-window">
+    <BlazorWebView x:Name="blazorWebView"
+                   HostPage="wwwroot/index.html"
+                   StartPath="/taskbar-window"
+                   BackgroundColor="#101014">
         <BlazorWebView.RootComponents>
             <RootComponent Selector="#app" ComponentType="{x:Type components:Routes}" />
         </BlazorWebView.RootComponents>
