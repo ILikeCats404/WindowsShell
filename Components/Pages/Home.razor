@@ -163,7 +163,7 @@
     </div>
     <div class="overlay"></div>
 
-    <div class="center-text-window">
+    <div class="center-text-window" style="@CenterThingStyle">
         <pre class="ansi-codebox">@((MarkupString)(PrivacyMode ? PrivacyCenterText : CenterTextHtml))</pre>
     </div>
 
@@ -582,6 +582,7 @@
     }
 
     private string CenterTextHtml = "";
+    private string CenterThingStyle => $"transform: translate(-50%, -50%) scale({(Config.centerThingScale / 100.0).ToString(System.Globalization.CultureInfo.InvariantCulture)});";
 
     private const string PrivacyCenterText =
 @"      \   /     -----
@@ -625,8 +626,8 @@
     {
         var weather = new Process();
 
-        weather.StartInfo.FileName = "C:\\Windows\\System32\\curl.exe";
-        weather.StartInfo.Arguments = $"wttr.in/{Config.lat},{Config.longi}";
+        weather.StartInfo.FileName = ResolveConfigPlaceholders(Config.weatherProcessStartItem);
+        weather.StartInfo.Arguments = ResolveConfigPlaceholders(Config.weatherProcessStartArguments);
         weather.StartInfo.RedirectStandardOutput = true;
         weather.StartInfo.RedirectStandardError = true;
         weather.StartInfo.StandardOutputEncoding = Encoding.UTF8;
@@ -641,6 +642,24 @@
         result = result.Split("Location:")[0];
         CenterTextHtml = AnsiToHtml(result);
         await InvokeAsync(StateHasChanged);
+    }
+
+    private static string ResolveConfigPlaceholders(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return "";
+        }
+
+        return value
+            .Replace("{config.longi}", Config.longi, StringComparison.OrdinalIgnoreCase)
+            .Replace("{config.longitude}", Config.longi, StringComparison.OrdinalIgnoreCase)
+            .Replace("{longi}", Config.longi, StringComparison.OrdinalIgnoreCase)
+            .Replace("{longitude}", Config.longi, StringComparison.OrdinalIgnoreCase)
+            .Replace("{config.lat}", Config.lat, StringComparison.OrdinalIgnoreCase)
+            .Replace("{config.latitude}", Config.lat, StringComparison.OrdinalIgnoreCase)
+            .Replace("{lat}", Config.lat, StringComparison.OrdinalIgnoreCase)
+            .Replace("{latitude}", Config.lat, StringComparison.OrdinalIgnoreCase);
     }
 
     private static readonly Dictionary<int, string> AnsiForegroundColors = new()
@@ -2228,6 +2247,201 @@
             color: #dfffe0;
         }
 
+    .dashboard.css-3 {
+        font-family: "Cascadia Code", "Consolas", monospace;
+        background:
+            radial-gradient(circle at 14% 18%, rgba(255, 44, 44, 0.34), transparent 22%),
+            radial-gradient(circle at 36% 12%, rgba(255, 226, 61, 0.28), transparent 20%),
+            radial-gradient(circle at 62% 82%, rgba(68, 255, 114, 0.24), transparent 24%),
+            radial-gradient(circle at 88% 26%, rgba(36, 116, 255, 0.32), transparent 23%),
+            linear-gradient(135deg, #130306 0%, #191006 28%, #031707 58%, #03112c 100%);
+    }
+
+        .dashboard.css-3::before,
+        .dashboard.css-3::after {
+            content: "";
+            position: absolute;
+            inset: -18%;
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        .dashboard.css-3::before {
+            background:
+                conic-gradient(from 210deg at 50% 50%, rgba(255, 40, 40, 0.28), rgba(255, 222, 64, 0.24), rgba(48, 255, 112, 0.22), rgba(47, 116, 255, 0.28), rgba(255, 40, 40, 0.28));
+            filter: blur(34px) saturate(1.7);
+            opacity: 0.72;
+            animation: spectrumDrift 16s ease-in-out infinite alternate;
+        }
+
+        .dashboard.css-3::after {
+            background:
+                linear-gradient(90deg, transparent 0 48%, rgba(255,255,255,0.09) 50%, transparent 52%),
+                repeating-linear-gradient(0deg, rgba(255,255,255,0.04) 0 1px, transparent 1px 8px);
+            opacity: 0.36;
+            mix-blend-mode: screen;
+            animation: scanSweep 10s linear infinite;
+        }
+
+        .dashboard.css-3 .overlay {
+            z-index: 1;
+            backdrop-filter: blur(20px) contrast(1.18) saturate(1.28);
+            background:
+                repeating-linear-gradient(90deg, rgba(255,255,255,0.05) 0 1px, transparent 1px 72px),
+                linear-gradient(180deg, rgba(0,0,0,0.18), rgba(0,0,0,0.42));
+            mask-image: linear-gradient(to bottom, black, rgba(0,0,0,0.72));
+        }
+
+        .dashboard.css-3 .dock {
+            top: 50%;
+            left: 18px;
+            transform: translateY(-50%);
+            width: 210px;
+            gap: 16px;
+        }
+
+        .dashboard.css-3 .widget,
+        .dashboard.css-3 .queue-terminal,
+        .dashboard.css-3 .discord-messages-panel,
+        .dashboard.css-3 .clipboard-panel,
+        .dashboard.css-3 .volume-overlay {
+            background: rgba(7, 8, 14, 0.74);
+            border: 1px solid rgba(255,255,255,0.22);
+            border-radius: 7px;
+            box-shadow:
+                0 18px 50px rgba(0,0,0,0.52),
+                0 0 24px rgba(255, 44, 44, 0.1),
+                0 0 34px rgba(42, 122, 255, 0.1),
+                inset 0 1px 0 rgba(255,255,255,0.12);
+            backdrop-filter: blur(13px) saturate(1.35);
+        }
+
+        .dashboard.css-3 .time-widget {
+            border-left: 4px solid #ff3030;
+        }
+
+        .dashboard.css-3 .weather-widget {
+            border-left: 4px solid #2f74ff;
+        }
+
+        .dashboard.css-3 .apps-grid {
+            gap: 14px;
+        }
+
+        .dashboard.css-3 .app-button {
+            border-radius: 9px;
+            border: 1px solid rgba(255,255,255,0.22);
+            background: rgba(8, 10, 18, 0.84);
+            box-shadow: 0 16px 34px rgba(0,0,0,0.46), inset 0 0 0 1px rgba(255,255,255,0.08);
+        }
+
+            .dashboard.css-3 .app-button:hover {
+                transform: translateY(-6px);
+                box-shadow: 0 22px 48px rgba(0,0,0,0.56), 0 0 24px rgba(255, 226, 61, 0.22);
+            }
+
+        .dashboard.css-3 .discord {
+            background: linear-gradient(145deg, #17214a, #2f74ff);
+        }
+
+        .dashboard.css-3 .explorer {
+            background: linear-gradient(145deg, #073919, #30e66d);
+        }
+
+        .dashboard.css-3 .firefox {
+            background: linear-gradient(145deg, #5a0909, #ffd63d);
+        }
+
+        .dashboard.css-3 .queue-terminal {
+            top: 28px;
+            right: 32px;
+            width: min(460px, 36vw);
+            height: 300px;
+        }
+
+        .dashboard.css-3 .discord-messages-panel {
+            top: 344px;
+            right: 32px;
+            width: min(460px, 36vw);
+            height: 360px;
+        }
+
+        .dashboard.css-3 .clickthrough-widget {
+            top: 70px;
+            left: 18px;
+            right: auto;
+            z-index: 21;
+        }
+
+        .dashboard.css-3 .open-apps-bar {
+            height: 68px;
+            padding: 10px 18px;
+            background:
+                linear-gradient(90deg, rgba(255, 45, 45, 0.28), rgba(255, 219, 59, 0.26), rgba(46, 232, 106, 0.26), rgba(42, 112, 255, 0.3)),
+                rgba(4, 5, 12, 0.9);
+            border-top: 1px solid rgba(255,255,255,0.32);
+            box-shadow:
+                0 -18px 46px rgba(0,0,0,0.46),
+                0 0 28px rgba(255, 44, 44, 0.2),
+                0 0 34px rgba(50, 255, 118, 0.16),
+                inset 0 1px 0 rgba(255,255,255,0.2);
+        }
+
+        .dashboard.css-3 .open-apps-bar::before {
+            content: "";
+            position: absolute;
+            left: 14px;
+            right: 14px;
+            top: 7px;
+            height: 2px;
+            border-radius: 99px;
+            background: linear-gradient(90deg, #ff3030, #ffdc3d, #31f070, #2f74ff);
+            box-shadow: 0 0 14px rgba(255,255,255,0.36);
+        }
+
+        .dashboard.css-3 .bottom-bar-clock {
+            color: #ffffff;
+            text-shadow: 0 0 10px rgba(255, 220, 61, 0.55), 0 0 18px rgba(47, 116, 255, 0.5);
+        }
+
+        .dashboard.css-3 .taskbar-item,
+        .dashboard.css-3 .open-app-button,
+        .dashboard.css-3 .settings-gear,
+        .dashboard.css-3 .top-close-button {
+            border-radius: 6px;
+            border: 1px solid rgba(255,255,255,0.24);
+            background: linear-gradient(135deg, rgba(255,48,48,0.16), rgba(255,220,61,0.14), rgba(49,240,112,0.14), rgba(47,116,255,0.18));
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.16), 0 8px 22px rgba(0,0,0,0.26);
+        }
+
+            .dashboard.css-3 .open-app-button:hover,
+            .dashboard.css-3 .taskbar-item:hover,
+            .dashboard.css-3 .settings-gear:hover,
+            .dashboard.css-3 .top-close-button:hover {
+                background: linear-gradient(135deg, rgba(255,48,48,0.32), rgba(255,220,61,0.28), rgba(49,240,112,0.28), rgba(47,116,255,0.34));
+                border-color: rgba(255,255,255,0.44);
+                box-shadow: inset 0 1px 0 rgba(255,255,255,0.24), 0 0 22px rgba(255,220,61,0.22), 0 0 28px rgba(47,116,255,0.2);
+            }
+
+        .dashboard.css-3 .terminal-topbar,
+        .dashboard.css-3 .discord-messages-header {
+            background: linear-gradient(90deg, rgba(255, 48, 48, 0.24), rgba(255, 220, 61, 0.18), rgba(49, 240, 112, 0.16), rgba(47, 116, 255, 0.22));
+            border-bottom-color: rgba(255,255,255,0.22);
+            color: #ffffff;
+        }
+
+        .dashboard.css-3 .terminal-line,
+        .dashboard.css-3 .discord-message {
+            color: #f7fff8;
+        }
+
+        .dashboard.css-3 .terminal-input,
+        .dashboard.css-3 .discord-input {
+            border-radius: 5px;
+            background: rgba(0,0,0,0.34);
+            color: #ffffff;
+        }
+
     @@keyframes linuxGlowDrift {
         from {
             transform: translate(-2%, -1%);
@@ -2248,14 +2462,27 @@
         }
     }
 
+    @@keyframes spectrumDrift {
+        from {
+            transform: translate(-3%, -2%) rotate(-4deg) scale(1);
+        }
+
+        to {
+            transform: translate(3%, 3%) rotate(5deg) scale(1.06);
+        }
+    }
+
     @@media (max-width: 900px) {
         .dashboard.css-2 .queue-terminal,
-        .dashboard.css-2 .discord-messages-panel {
+        .dashboard.css-2 .discord-messages-panel,
+        .dashboard.css-3 .queue-terminal,
+        .dashboard.css-3 .discord-messages-panel {
             width: calc(100vw - 48px);
             right: 24px;
         }
 
-        .dashboard.css-2 .dock {
+        .dashboard.css-2 .dock,
+        .dashboard.css-3 .dock {
             left: 24px;
         }
     }

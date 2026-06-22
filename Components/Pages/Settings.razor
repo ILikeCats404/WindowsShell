@@ -22,6 +22,7 @@
                 <select @bind="cssStyle">
                     <option value="1">CSS 1</option>
                     <option value="2">CSS 2</option>
+                    <option value="3">CSS 3</option>
                 </select>
             </label>
 
@@ -54,6 +55,24 @@
                 <span>Termius path</span>
                 <input @bind="termiusPath" />
             </label>
+
+            <label class="setting-row">
+                <span>Weather process</span>
+                <input @bind="weatherProcessStartItem" />
+            </label>
+
+            <label class="setting-row">
+                <span>Weather arguments</span>
+                <input @bind="weatherProcessStartArguments" />
+            </label>
+
+            <label class="setting-row range-row">
+                <span>Center scale</span>
+                <div class="range-control">
+                    <input type="range" min="50" max="200" step="5" @bind="centerThingScale" />
+                    <strong>@centerThingScale%</strong>
+                </div>
+            </label>
         </div>
 
         <footer class="settings-actions">
@@ -71,6 +90,9 @@
     private string privateUsername = "";
     private string discordPath = "";
     private string termiusPath = "";
+    private string weatherProcessStartItem = "";
+    private string weatherProcessStartArguments = "";
+    private int centerThingScale = 100;
     private int cssStyle = 1;
     private string status = "Loaded from config";
 
@@ -83,6 +105,9 @@
         privateUsername = Config.privateUsername;
         discordPath = Config.discordPath;
         termiusPath = Config.termiusPath;
+        weatherProcessStartItem = Config.weatherProcessStartItem;
+        weatherProcessStartArguments = Config.weatherProcessStartArguments;
+        centerThingScale = Config.centerThingScale;
         cssStyle = Config.cssStyle;
     }
 
@@ -95,7 +120,10 @@
         Config.privateUsername = privateUsername;
         Config.discordPath = discordPath;
         Config.termiusPath = termiusPath;
-        Config.cssStyle = Math.Clamp(cssStyle, 1, 2);
+        Config.weatherProcessStartItem = weatherProcessStartItem;
+        Config.weatherProcessStartArguments = weatherProcessStartArguments;
+        Config.centerThingScale = Math.Clamp(centerThingScale, 50, 200);
+        Config.cssStyle = Math.Clamp(cssStyle, 1, 3);
         Config.Save();
         status = $"Saved {DateTime.Now:h:mm:ss tt}";
     }
@@ -112,10 +140,13 @@
         min-height: 100%;
         background: #4a4a4a;
         font-family: "Segoe UI", sans-serif;
+        overflow-y: auto;
     }
 
     .settings-page {
         min-height: 100vh;
+        height: auto;
+        overflow-y: auto;
         background: #4a4a4a;
         color: #f4f4f4;
         padding: 48px;
@@ -200,6 +231,19 @@
         width: 22px;
         height: 22px;
         accent-color: #a8d46f;
+    }
+
+    .range-control {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 58px;
+        gap: 12px;
+        align-items: center;
+    }
+
+    .range-control strong {
+        text-align: right;
+        font: 13px Consolas, monospace;
+        color: rgba(255,255,255,0.82);
     }
 
     .toggle-row {

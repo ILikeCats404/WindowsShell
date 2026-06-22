@@ -14,6 +14,9 @@ namespace DesktopWallpaper
         public static string privateUsername = "";
         public static string discordPath = "";
         public static string termiusPath = "";
+        public static string weatherProcessStartItem = "C:\\Windows\\System32\\curl.exe";
+        public static string weatherProcessStartArguments = "wttr.in/{Config.lat},{Config.longi}";
+        public static int centerThingScale = 100;
         public static int cssStyle = 1;
 
         public static string SettingsFilePath => Path.Combine(FileSystem.AppDataDirectory, "settings.txt");
@@ -68,10 +71,22 @@ namespace DesktopWallpaper
                     case nameof(termiusPath):
                         termiusPath = value;
                         break;
+                    case nameof(weatherProcessStartItem):
+                        weatherProcessStartItem = value;
+                        break;
+                    case nameof(weatherProcessStartArguments):
+                        weatherProcessStartArguments = value;
+                        break;
+                    case nameof(centerThingScale):
+                        if (int.TryParse(value, out var parsedCenterThingScale))
+                        {
+                            centerThingScale = Math.Clamp(parsedCenterThingScale, 50, 200);
+                        }
+                        break;
                     case nameof(cssStyle):
                         if (int.TryParse(value, out var parsedCssStyle))
                         {
-                            cssStyle = Math.Clamp(parsedCssStyle, 1, 2);
+                            cssStyle = Math.Clamp(parsedCssStyle, 1, 3);
                         }
                         break;
                 }
@@ -91,6 +106,9 @@ namespace DesktopWallpaper
                 $"{nameof(privateUsername)}={privateUsername}",
                 $"{nameof(discordPath)}={discordPath}",
                 $"{nameof(termiusPath)}={termiusPath}",
+                $"{nameof(weatherProcessStartItem)}={weatherProcessStartItem}",
+                $"{nameof(weatherProcessStartArguments)}={weatherProcessStartArguments}",
+                $"{nameof(centerThingScale)}={centerThingScale}",
                 $"{nameof(cssStyle)}={cssStyle}"
             };
 
