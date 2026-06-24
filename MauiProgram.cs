@@ -176,6 +176,9 @@ namespace DesktopWallpaper
         [DllImport("user32.dll")]
         private static extern bool SetForegroundWindow(IntPtr hWnd);
 
+        [DllImport("user32.dll", CharSet = CharSet.Auto)]
+        private static extern IntPtr FindWindow(string? lpClassName, string? lpWindowName);
+
         [DllImport("user32.dll")]
         private static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
 
@@ -1114,6 +1117,17 @@ namespace DesktopWallpaper
             SetForegroundWindow(_hwnd);
         }
 
+        private static void ReleaseForegroundAppFocus()
+        {
+            var taskbarHwnd = FindWindow("Shell_TrayWnd", null);
+            if (taskbarHwnd == IntPtr.Zero)
+            {
+                return;
+            }
+
+            SetForegroundWindow(taskbarHwnd);
+        }
+
         private static IntPtr KeyboardHookHandler(int nCode, IntPtr wParam, IntPtr lParam)
         {
             if (nCode < 0)
@@ -1147,6 +1161,7 @@ namespace DesktopWallpaper
 
             if (IsWinKey(vkCode))
             {
+                ReleaseForegroundAppFocus();
                 _winKeyDown = true;
                 _startKeyAltChord = _altKeyDown;
                 _screenSnipHandled = false;
@@ -1174,6 +1189,7 @@ namespace DesktopWallpaper
 
             if (_winKeyDown && vkCode == VK_V)
             {
+                ReleaseForegroundAppFocus();
                 _screenSnipHandled = true;
                 OpenInteractiveMode();
                 ClipboardHistoryPressed?.Invoke();
@@ -1182,6 +1198,7 @@ namespace DesktopWallpaper
 
             if (_altKeyDown && vkCode == VK_TAB)
             {
+                ReleaseForegroundAppFocus();
                 OpenOrCycleAltTabWindow();
                 return 1;
             }
