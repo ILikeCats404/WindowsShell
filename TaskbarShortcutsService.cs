@@ -1,5 +1,4 @@
 ﻿using System.Diagnostics;
-using System.Runtime.InteropServices;
 using System.Text;
 
 namespace DesktopWallpaper.Services
@@ -17,14 +16,6 @@ namespace DesktopWallpaper.Services
         private static readonly string Folder = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             @"Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar");
-
-        [DllImport("user32.dll")]
-        private static extern bool SetForegroundWindow(IntPtr hWnd);
-
-        [DllImport("user32.dll")]
-        private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-
-        private const int SW_SHOW = 5;
 
         public List<TaskbarShortcut> GetShortcuts()
         {
@@ -48,10 +39,12 @@ namespace DesktopWallpaper.Services
 
         public async Task LaunchAsync(TaskbarShortcut shortcut)
         {
+            string? targetExe = null;
+
             try
             {
                 // Try to extract the target executable from the shortcut
-                string? targetExe = ExtractShortcutExeName(shortcut.Path);
+                targetExe = ExtractShortcutExeName(shortcut.Path);
 
                 if (!string.IsNullOrWhiteSpace(targetExe))
                 {
@@ -68,8 +61,7 @@ namespace DesktopWallpaper.Services
                                 IntPtr hwnd = proc.MainWindowHandle;
                                 if (hwnd != IntPtr.Zero)
                                 {
-                                    ShowWindow(hwnd, SW_SHOW);
-                                    SetForegroundWindow(hwnd);
+                                    MauiProgram.FocusAndBringToFront(hwnd);
                                     return;
                                 }
                             }
@@ -80,6 +72,7 @@ namespace DesktopWallpaper.Services
 
                 // Process not running or couldn't determine - launch it
                 MauiProgram.StartWithFreshEnvironment("explorer.exe", QuoteArgument(shortcut.Path));
+                await FocusLaunchedProcessAsync(targetExe);
             }
             catch
             {
@@ -91,6 +84,53 @@ namespace DesktopWallpaper.Services
             }
 
             await Task.CompletedTask;
+        }
+
+        private static async Task FocusLaunchedProcessAsync(string? targetExe)
+        {
+            if (string.IsNullOrWhiteSpace(targetExe))
+            {
+                return;
+            }
+
+            var processName = Path.GetFileNameWithoutExtension(targetExe);
+            if (string.IsNullOrWhiteSpace(processName))
+            {
+                return;
+            }
+
+            for (var attempt = 0; attempt < 20; attempt++)
+            {
+                await Task.Delay(100);
+
+                foreach (var process in Process.GetProcessesByName(processName))
+                {
+                    try
+                    {
+                        if (process.MainWindowHandle == IntPtr.Zero)
+                        {
+                            process.Refresh();
+                        }
+
+                        var hwnd = process.MainWindowHandle;
+                        if (hwnd == IntPtr.Zero)
+                        {
+                            continue;
+                        }
+
+                        MauiProgram.FocusAndBringToFront(hwnd);
+                        return;
+                    }
+                    catch
+                    {
+                        // The process may exit while we are polling it.
+                    }
+                    finally
+                    {
+                        process.Dispose();
+                    }
+                }
+            }
         }
 
         private static string QuoteArgument(string value)

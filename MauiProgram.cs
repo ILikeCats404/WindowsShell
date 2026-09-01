@@ -176,6 +176,12 @@ namespace DesktopWallpaper
         [DllImport("user32.dll")]
         private static extern bool SetForegroundWindow(IntPtr hWnd);
 
+        [DllImport("user32.dll")]
+        private static extern bool BringWindowToTop(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr SetActiveWindow(IntPtr hWnd);
+
         [DllImport("user32.dll", CharSet = CharSet.Auto)]
         private static extern IntPtr FindWindow(string? lpClassName, string? lpWindowName);
 
@@ -502,9 +508,24 @@ namespace DesktopWallpaper
 
             ShowWindow(_hwnd, SW_SHOW);
             _presenter?.Maximize();
-            SetWindowPos(_hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
-            SetForegroundWindow(_hwnd);
-            SetWindowPos(_hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+            FocusAndBringToFront(_hwnd);
+#endif
+        }
+
+        public static void FocusAndBringToFront(IntPtr hwnd)
+        {
+#if WINDOWS
+            if (hwnd == IntPtr.Zero)
+            {
+                return;
+            }
+
+            ShowWindow(hwnd, IsIconic(hwnd) ? 9 : SW_SHOW);
+            SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+            BringWindowToTop(hwnd);
+            SetActiveWindow(hwnd);
+            SetForegroundWindow(hwnd);
+            SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
 #endif
         }
 
@@ -1007,8 +1028,7 @@ namespace DesktopWallpaper
             exStyle |= WS_EX_TOOLWINDOW | WS_EX_LAYERED;
             SetWindowLong(hwnd, GWL_EXSTYLE, exStyle);
             SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW);
-            ShowWindow(hwnd, SW_SHOW);
-            SetForegroundWindow(hwnd);
+            FocusAndBringToFront(hwnd);
         }
 
         private static void ConfigureAltTabWindow(WinUIWindow window, IntPtr hwnd)
@@ -1036,7 +1056,7 @@ namespace DesktopWallpaper
             exStyle |= WS_EX_TOOLWINDOW | WS_EX_LAYERED;
             SetWindowLong(hwnd, GWL_EXSTYLE, exStyle);
             SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW);
-            ShowWindow(hwnd, SW_SHOW);
+            FocusAndBringToFront(hwnd);
         }
 
         private static void RegisterShellHotkeys()
@@ -1113,8 +1133,7 @@ namespace DesktopWallpaper
 
             ShowWindow(_hwnd, SW_SHOW);
             _presenter?.Maximize();
-            SetWindowPos(_hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
-            SetForegroundWindow(_hwnd);
+            FocusAndBringToFront(_hwnd);
         }
 
         private static void ReleaseForegroundAppFocus()

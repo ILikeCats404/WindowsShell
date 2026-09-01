@@ -17,8 +17,6 @@ namespace DesktopWallpaper.Services
     {
         private const int GWL_EXSTYLE = -20;
         private const int SW_MINIMIZE = 6;
-        private const int SW_RESTORE = 9;
-        private const int SW_SHOW = 5;
         private const int WS_EX_TOOLWINDOW = 0x00000080;
         private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
 
@@ -49,9 +47,6 @@ namespace DesktopWallpaper.Services
 
         [DllImport("user32.dll")]
         private static extern bool ShowWindow(nint hWnd, int nCmdShow);
-
-        [DllImport("user32.dll")]
-        private static extern bool SetForegroundWindow(nint hWnd);
 
         [DllImport("user32.dll")]
         private static extern nint GetForegroundWindow();
@@ -127,8 +122,7 @@ namespace DesktopWallpaper.Services
             if (!OperatingSystem.IsWindows() || window.Handle == 0)
                 return;
 
-            ShowWindow(window.Handle, window.IsMinimized ? SW_RESTORE : SW_SHOW);
-            SetForegroundWindow(window.Handle);
+            MauiProgram.FocusAndBringToFront((IntPtr)window.Handle);
         }
 
         public void ToggleWindow(OpenWindowInfo window)
